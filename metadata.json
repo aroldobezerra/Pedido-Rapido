@@ -1,0 +1,8 @@
+{
+  "name": "Pedido Rápido",
+  "description": "A high-end food delivery and management application featuring AI-powered image generation for menu items, smart product editing, and integrated WhatsApp ordering.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
