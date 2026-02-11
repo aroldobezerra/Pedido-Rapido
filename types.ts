@@ -49,6 +49,8 @@ export type OrderStatus = 'Received' | 'Preparing' | 'Ready' | 'Delivered' | 'Ca
 
 export interface Order {
   id: string;
+  // Added store_id to fix TS error when accessing it from Supabase realtime payloads
+  store_id: string;
   items: CartItem[];
   status: OrderStatus;
   estimatedArrival: string;
