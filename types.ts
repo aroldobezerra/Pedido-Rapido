@@ -32,6 +32,7 @@ export interface Store {
   name: string;
   whatsapp: string;
   adminPassword: string;
+  customDomain?: string;
   products: Product[];
   orders: Order[];
   createdAt: number;

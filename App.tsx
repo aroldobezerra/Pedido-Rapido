@@ -37,7 +37,6 @@ const App: React.FC = () => {
     pickupTime: ''
   });
 
-  // Função robusta de mapeamento
   const mapProduct = (p: any): Product => ({
     ...p,
     id: String(p.id),
@@ -47,7 +46,6 @@ const App: React.FC = () => {
     category: p.category as Category
   });
 
-  // 1. Inicialização
   useEffect(() => {
     if (!isSupabaseConfigured()) {
       setMissingKeys(getMissingConfigKeys());
@@ -68,6 +66,7 @@ const App: React.FC = () => {
         const allStores = (storesData || []).map((s: any) => ({
           ...s,
           adminPassword: s.admin_password || s.adminPassword || "", 
+          customDomain: s.custom_domain || "",
           isOpen: s.is_open ?? true,
           products: (s.products || []).map(mapProduct),
           orders: s.orders || []
@@ -130,6 +129,7 @@ const App: React.FC = () => {
         setStores(prev => [...prev, mapped]);
         setCurrentStore(mapped);
         setView('MENU');
+        window.history.pushState({}, '', `?s=${mapped.slug}`);
       }
     } catch (err: any) { alert("Erro no cadastro: " + err.message); } 
     finally { setIsLoading(false); }
@@ -158,13 +158,22 @@ const App: React.FC = () => {
     if (!currentStore) return;
     const dbUpdates: any = {};
     if (updates.whatsapp) dbUpdates.whatsapp = updates.whatsapp;
-    if (updates.admin_password) dbUpdates.admin_password = updates.admin_password;
+    if (updates.adminPassword) dbUpdates.admin_password = updates.adminPassword;
+    if (updates.customDomain !== undefined) dbUpdates.custom_domain = updates.customDomain;
+
     const { error } = await supabase.from('stores').update(dbUpdates).eq('id', currentStore.id);
     if (!error) {
-      const updatedStore = { ...currentStore, ...updates, adminPassword: updates.admin_password || currentStore.adminPassword };
+      const updatedStore = { 
+        ...currentStore, 
+        ...updates, 
+        adminPassword: updates.adminPassword || currentStore.adminPassword,
+        customDomain: updates.customDomain !== undefined ? updates.customDomain : currentStore.customDomain
+      };
       setCurrentStore(updatedStore);
       setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
       alert("Ajustes salvos com sucesso!");
+    } else {
+      alert("Erro ao salvar: " + error.message);
     }
   };
 
@@ -195,7 +204,7 @@ const App: React.FC = () => {
         <CustomerMenu 
           storeName={currentStore.name} isOpen={currentStore.isOpen} products={currentStore.products} 
           onAddToCart={(p) => { if(!currentStore.isOpen) return; setCart(prev => { const ex = prev.find(i => i.product.id === p.id); if(ex) return prev.map(i => i.product.id === p.id ? {...i, quantity: i.quantity + 1} : i); return [...prev, {product: p, quantity: 1, selectedExtras: []}]; }); }} 
-          cartCount={cart.reduce((a, b) => a + b.quantity, 0)} subtotal={subtotal} onViewCart={() => setView('CART')} onViewAdmin={() => { setLoginError(''); setView('ADMIN_LOGIN'); }} onBack={() => { setCurrentStore(null); window.history.pushState({}, '', '/'); setView('HOME'); }}
+          cartCount={cart.reduce((a, b) => a + b.quantity, 0)} subtotal={subtotal} onViewCart={() => setView('CART')} onViewAdmin={() => { setLoginError(''); setView('ADMIN_LOGIN'); }} onBack={() => { setCurrentStore(null); window.history.pushState({}, '', window.location.pathname); setView('HOME'); }}
         />
       )}
 
@@ -216,9 +225,12 @@ const App: React.FC = () => {
 
       {view === 'ADMIN' && currentStore && (
         <AdminDashboard 
-          whatsappNumber={currentStore.whatsapp} isOpen={currentStore.isOpen} orders={currentStore.orders || []} onToggleStoreStatus={() => handleUpdateStoreStatus(!currentStore.isOpen)} onUpdateWhatsApp={(w) => handleUpdateStoreSettings({ whatsapp: w })} onUpdateOrderStatus={(id, st) => supabase.from('orders').update({status: st}).eq('id', id)}
+          slug={currentStore.slug} customDomain={currentStore.customDomain} whatsappNumber={currentStore.whatsapp} isOpen={currentStore.isOpen} orders={currentStore.orders || []} onToggleStoreStatus={() => handleUpdateStoreStatus(!currentStore.isOpen)} 
+          onUpdateWhatsApp={(w) => handleUpdateStoreSettings({ whatsapp: w })} 
+          onUpdateStoreSettings={(settings) => handleUpdateStoreSettings(settings)}
+          onUpdateOrderStatus={(id, st) => supabase.from('orders').update({status: st}).eq('id', id)}
           products={currentStore.products} onAddProduct={() => { setEditingProduct(null); setView('PRODUCT_FORM'); }} onEditProduct={(p) => { setEditingProduct(p); setView('PRODUCT_FORM'); }} onToggleAvailability={() => {}} onBack={() => { setView('MENU'); setIsAdminLoggedIn(false); }}
-          onUpdatePassword={(p) => handleUpdateStoreSettings({ admin_password: p })}
+          onUpdatePassword={(p) => handleUpdateStoreSettings({ adminPassword: p })}
         />
       )}
 
