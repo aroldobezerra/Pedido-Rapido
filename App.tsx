@@ -27,6 +27,9 @@ const App: React.FC = () => {
   const [storeNotFound, setStoreNotFound] = useState(false);
   const [missingKeys, setMissingKeys] = useState<string[]>([]);
   
+  // Categorias criadas na sessão que ainda não possuem produtos
+  const [sessionCategories, setSessionCategories] = useState<string[]>([]);
+
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
@@ -131,6 +134,9 @@ const App: React.FC = () => {
         return;
       }
 
+      // Atualiza também as categorias da sessão se o nome antigo estiver lá
+      setSessionCategories(prev => prev.map(c => c === oldName ? newName : c));
+
       // Recarrega produtos
       const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
       if (refreshed) {
@@ -157,6 +163,9 @@ const App: React.FC = () => {
         return;
       }
 
+      // Remove da sessão também
+      setSessionCategories(prev => prev.filter(c => c !== catName));
+
       const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
       if (refreshed) {
         const mapped = refreshed.map(mapProduct);
@@ -167,11 +176,16 @@ const App: React.FC = () => {
       return;
     }
 
+    // ADICIONAR NOVA CATEGORIA À SESSÃO
+    if (updates._categoryAdd) {
+      setSessionCategories(prev => Array.from(new Set([...prev, updates._categoryAdd])));
+      return;
+    }
+
     const dbUpdates: any = {};
     if (updates.whatsapp) dbUpdates.whatsapp = updates.whatsapp;
     if (updates.adminPassword) dbUpdates.admin_password = updates.adminPassword;
     
-    // CRITICAL: Nunca enviar a chave 'categories' para o Supabase se a coluna não existir
     const { error } = await supabase.from('stores').update(dbUpdates).eq('id', currentStore.id);
     if (!error) {
       const updatedStore = { 
@@ -190,8 +204,10 @@ const App: React.FC = () => {
   const derivedCategories = useMemo(() => {
     if (!currentStore) return DEFAULT_CATEGORIES;
     const fromProducts = Array.from(new Set(currentStore.products.map(p => p.category).filter(Boolean)));
-    return fromProducts.length > 0 ? fromProducts : DEFAULT_CATEGORIES;
-  }, [currentStore?.products]);
+    // Combina categorias de produtos, sessão e padrão
+    const combined = Array.from(new Set([...fromProducts, ...sessionCategories]));
+    return combined.length > 0 ? combined : DEFAULT_CATEGORIES;
+  }, [currentStore?.products, sessionCategories]);
 
   const handleDeleteProduct = async (productId: string) => {
     if (!currentStore) return;
@@ -275,6 +291,9 @@ const App: React.FC = () => {
         const isNew = !p.id || p.id === 'new' || !p.id.includes('-');
         const { error } = isNew ? await supabase.from('products').insert([dbData]) : await supabase.from('products').update(dbData).eq('id', p.id);
         if(!error) { 
+          // Limpa a categoria da sessão se ela agora foi salva em um produto
+          setSessionCategories(prev => prev.filter(c => c !== p.category));
+
           const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
           if (refreshed) {
             const mapped = refreshed.map(mapProduct);

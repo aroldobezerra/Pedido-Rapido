@@ -33,17 +33,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
 
-  // Estados locais para categorias
+  // Estados locais para edição
   const [editingCategoryIdx, setEditingCategoryIdx] = useState<number | null>(null);
   const [categoryNameInput, setCategoryNameInput] = useState('');
   const [isAddingCategory, setIsAddingCategory] = useState(false);
-  
-  // Categorias "temporárias" são aquelas criadas pelo usuário que ainda não têm produtos vinculados
-  const [temporaryCategories, setTemporaryCategories] = useState<string[]>([]);
-
-  const allAvailableCategories = useMemo(() => {
-    return Array.from(new Set([...categories, ...temporaryCategories])).filter(Boolean);
-  }, [categories, temporaryCategories]);
 
   const stats = useMemo(() => {
     const totalVendas = orders.reduce((acc, o) => o.status !== 'Cancelled' ? acc + o.total : acc, 0);
@@ -91,37 +84,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleAddCategory = () => {
     const name = categoryNameInput.trim();
     if (!name) return;
-    if (allAvailableCategories.includes(name)) {
+    if (categories.includes(name)) {
       alert("Essa categoria já existe.");
       return;
     }
-    setTemporaryCategories(prev => [...prev, name]);
+    // Dispara para o App.tsx salvar na lista de sessão
+    onUpdateStoreSettings({ _categoryAdd: name });
+    
     setCategoryNameInput('');
     setIsAddingCategory(false);
     alert("Pronto! Categoria adicionada à lista. Agora você pode selecioná-la ao criar ou editar um produto.");
   };
 
   const handleRenameCategoryAction = (index: number) => {
-    const oldName = allAvailableCategories[index];
+    const oldName = categories[index];
     const newName = categoryNameInput.trim();
     if (!newName || newName === oldName) {
       setEditingCategoryIdx(null);
       return;
     }
     
-    // Dispara renomeação em lote no Supabase
     onUpdateStoreSettings({ 
       _categoryMapping: { oldName, newName }
     });
 
     setEditingCategoryIdx(null);
     setCategoryNameInput('');
-    // Remove da lista temporária pois ela agora será detectada nos produtos
-    setTemporaryCategories(prev => prev.filter(c => c !== oldName));
   };
 
   const handleDeleteCategoryAction = (index: number) => {
-    const catName = allAvailableCategories[index];
+    const catName = categories[index];
     const hasProducts = products.some(p => p.category === catName);
     
     if (hasProducts) {
@@ -129,9 +121,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       onUpdateStoreSettings({ _categoryDelete: { catName } });
     } else {
       if (!confirm(`Deseja remover "${catName}" da lista?`)) return;
+      onUpdateStoreSettings({ _categoryDelete: { catName } });
     }
-
-    setTemporaryCategories(prev => prev.filter(c => c !== catName));
   };
 
   const translateStatus = (status: string) => {
@@ -338,7 +329,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
 
                 <div className="space-y-2">
-                   {allAvailableCategories.map((cat, idx) => (
+                   {categories.map((cat, idx) => (
                       <div key={idx} className="flex items-center justify-between bg-gray-50 dark:bg-white/5 p-4 rounded-2xl group border border-transparent hover:border-primary/20 transition-all">
                          {editingCategoryIdx === idx ? (
                             <div className="flex-1 flex gap-2">
