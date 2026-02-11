@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { Store, Category } from '../types';
+import { Store } from '../types';
 import { INITIAL_PRODUCTS } from '../constants';
 
 interface RegisterStoreProps {
@@ -12,6 +13,7 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
   const [slug, setSlug] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [password, setPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -24,13 +26,12 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
     setIsSubmitting(true);
 
     try {
-      // Fix: Added missing 'orders' property to match Store interface requirements.
       const newStore: Store = {
         id: Date.now().toString(),
-        name,
-        slug: slug.toLowerCase().replace(/\s/g, '-').replace(/[^a-z0-9-]/g, ''),
-        whatsapp: whatsapp.replace(/\D/g, ''),
-        adminPassword: password,
+        name: name.trim(),
+        slug: slug.toLowerCase().replace(/\s/g, '-').replace(/[^a-z0-9-]/g, '').trim(),
+        whatsapp: whatsapp.replace(/\D/g, '').trim(),
+        adminPassword: password.trim(),
         products: [...INITIAL_PRODUCTS],
         orders: [],
         createdAt: Date.now(),
@@ -40,7 +41,7 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
       onRegister(newStore);
     } catch (err) {
       console.error("Erro ao criar objeto da loja:", err);
-      alert("Ocorreu um erro ao processar os dados da lanchonete.");
+      alert("Ocorreu um erro ao processar os dados.");
     } finally {
       setIsSubmitting(false);
     }
@@ -55,7 +56,7 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
         <h1 className="text-2xl font-black tracking-tight">Novo Cadastro</h1>
       </header>
 
-      <form onSubmit={handleSubmit} className="max-w-md mx-auto w-full space-y-6">
+      <form onSubmit={handleSubmit} className="max-w-md mx-auto w-full space-y-6 animate-in slide-in-from-bottom duration-500">
         <div className="space-y-4">
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">Nome da Lanchonete</label>
@@ -80,7 +81,6 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
                 placeholder="Ex: burger-king-gourmet"
               />
             </div>
-            <p className="text-[10px] text-gray-400 px-1 italic">Este será seu link: seuapp.com/?s={slug || 'identificador'}</p>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -97,14 +97,24 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">Senha de Admin</label>
-            <input 
-              required
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-4 focus:ring-4 focus:ring-primary/20 outline-none transition-all"
-              placeholder="Sua senha secreta"
-            />
+            <div className="relative">
+              <input 
+                required
+                type={showPass ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-4 focus:ring-4 focus:ring-primary/20 outline-none transition-all"
+                placeholder="Sua senha secreta"
+              />
+              <button 
+                type="button" 
+                onClick={() => setShowPass(!showPass)} 
+                className="absolute right-4 top-4 text-gray-400"
+              >
+                <span className="material-symbols-outlined text-sm">{showPass ? 'visibility_off' : 'visibility'}</span>
+              </button>
+            </div>
+            <p className="text-[10px] text-gray-400 px-1 italic">Essa senha será usada para acessar seu painel de vendas.</p>
           </div>
         </div>
 

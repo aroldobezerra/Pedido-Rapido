@@ -7,6 +7,7 @@ interface SaaSAdminDashboardProps {
   saasPassword: string;
   onUpdateSaaSPassword: (pass: string) => void;
   onDeleteStore: (id: string) => void;
+  onUpdateStorePassword: (storeId: string, newPass: string) => void;
   onViewStore: (store: Store) => void;
   onBack: () => void;
 }
@@ -16,6 +17,7 @@ const SaaSAdminDashboard: React.FC<SaaSAdminDashboardProps> = ({
   saasPassword, 
   onUpdateSaaSPassword, 
   onDeleteStore, 
+  onUpdateStorePassword,
   onViewStore, 
   onBack 
 }) => {
@@ -23,28 +25,17 @@ const SaaSAdminDashboard: React.FC<SaaSAdminDashboardProps> = ({
   const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
+  const [editingStoreId, setEditingStoreId] = useState<string | null>(null);
+  const [storeNewPass, setStoreNewPass] = useState('');
 
   const totalGlobalVendas = stores.reduce((acc, s) => acc + (s.orders?.reduce((sum, o) => o.status !== 'Cancelled' ? sum + o.total : sum, 0) || 0), 0);
   const totalGlobalPedidos = stores.reduce((acc, s) => acc + (s.orders?.length || 0), 0);
 
   const handlePasswordChange = () => {
-    if (currentPass !== saasPassword) {
-      alert("Senha atual incorreta.");
-      return;
-    }
-    if (newPass !== confirmPass) {
-      alert("As novas senhas não coincidem.");
-      return;
-    }
-    if (newPass.length < 4) {
-      alert("A senha deve ter pelo menos 4 caracteres.");
-      return;
-    }
+    if (currentPass !== saasPassword) { alert("Senha atual incorreta."); return; }
+    if (newPass !== confirmPass) { alert("As novas senhas não coincidem."); return; }
     onUpdateSaaSPassword(newPass);
     alert("Senha alterada com sucesso!");
-    setCurrentPass('');
-    setNewPass('');
-    setConfirmPass('');
     setShowSettings(false);
   };
 
@@ -55,135 +46,102 @@ const SaaSAdminDashboard: React.FC<SaaSAdminDashboardProps> = ({
           <button onClick={onBack} className="p-2 bg-gray-100 dark:bg-white/5 rounded-full hover:bg-primary/10 transition-colors">
             <span className="material-symbols-outlined">arrow_back</span>
           </button>
-          <h1 className="text-xl font-black">Painel do Dono SaaS</h1>
+          <h1 className="text-xl font-black">Painel Master</h1>
         </div>
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={() => setShowSettings(!showSettings)}
-            className={`p-2 rounded-full transition-all ${showSettings ? 'bg-primary text-white' : 'bg-gray-100 dark:bg-white/5 hover:bg-gray-200'}`}
-          >
-            <span className="material-symbols-outlined">settings</span>
-          </button>
-          <div className="flex items-center gap-2 bg-primary/10 px-4 py-2 rounded-full hidden sm:flex">
-            <span className="size-2 bg-primary rounded-full animate-ping"></span>
-            <span className="text-[10px] font-black text-primary uppercase">Plataforma Live</span>
-          </div>
-        </div>
+        <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-full ${showSettings ? 'bg-primary text-white' : 'bg-gray-100 dark:bg-white/5'}`}>
+          <span className="material-symbols-outlined">settings</span>
+        </button>
       </header>
 
       <main className="max-w-5xl mx-auto w-full p-6 space-y-8">
         {showSettings && (
           <section className="bg-white dark:bg-white/5 p-6 rounded-3xl shadow-sm border border-primary/20 animate-in slide-in-from-top duration-300">
-            <h3 className="text-lg font-black mb-4 flex items-center gap-2">
-              <span className="material-symbols-outlined text-primary">security</span>
-              Configurações de Segurança
-            </h3>
+            <h3 className="text-lg font-black mb-4">Ajustes Master</h3>
             <div className="grid md:grid-cols-3 gap-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-black uppercase text-gray-400 px-1">Senha Atual</label>
-                <input 
-                  type="password"
-                  value={currentPass}
-                  onChange={(e) => setCurrentPass(e.target.value)}
-                  className="w-full bg-gray-50 dark:bg-white/5 border-none rounded-2xl p-4 focus:ring-4 focus:ring-primary/10"
-                  placeholder="••••••"
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-black uppercase text-gray-400 px-1">Nova Senha</label>
-                <input 
-                  type="password"
-                  value={newPass}
-                  onChange={(e) => setNewPass(e.target.value)}
-                  className="w-full bg-gray-50 dark:bg-white/5 border-none rounded-2xl p-4 focus:ring-4 focus:ring-primary/10"
-                  placeholder="••••••"
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-black uppercase text-gray-400 px-1">Confirmar Nova Senha</label>
-                <div className="flex gap-2">
-                  <input 
-                    type="password"
-                    value={confirmPass}
-                    onChange={(e) => setConfirmPass(e.target.value)}
-                    className="flex-1 bg-gray-50 dark:bg-white/5 border-none rounded-2xl p-4 focus:ring-4 focus:ring-primary/10"
-                    placeholder="••••••"
-                  />
-                  <button 
-                    onClick={handlePasswordChange}
-                    className="bg-primary text-white font-black px-6 rounded-2xl hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20"
-                  >
-                    Salvar
-                  </button>
-                </div>
-              </div>
+              <input type="password" value={currentPass} onChange={(e) => setCurrentPass(e.target.value)} className="w-full bg-gray-50 dark:bg-white/5 rounded-2xl p-4" placeholder="Senha Atual" />
+              <input type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} className="w-full bg-gray-50 dark:bg-white/5 rounded-2xl p-4" placeholder="Nova Senha" />
+              <button onClick={handlePasswordChange} className="bg-primary text-white font-black px-6 rounded-2xl py-4">Salvar Nova Senha Master</button>
             </div>
           </section>
         )}
 
         {/* Global Stats */}
         <section className="grid md:grid-cols-3 gap-6">
-          <div className="bg-white dark:bg-white/5 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-white/5">
-            <p className="text-[10px] font-black uppercase text-gray-400 mb-2">Lanchonetes Ativas</p>
-            <p className="text-3xl font-black">{stores.length}</p>
+          <div className="bg-white dark:bg-white/5 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-white/5 text-center">
+            <p className="text-[10px] font-black uppercase text-gray-400 mb-2">Lanchonetes</p>
+            <p className="text-3xl font-black text-primary">{stores.length}</p>
           </div>
-          <div className="bg-white dark:bg-white/5 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-white/5">
-            <p className="text-[10px] font-black uppercase text-gray-400 mb-2">Pedidos Processados</p>
-            <p className="text-3xl font-black text-green-500">{totalGlobalPedidos}</p>
+          <div className="bg-white dark:bg-white/5 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-white/5 text-center">
+            <p className="text-[10px] font-black uppercase text-gray-400 mb-2">Pedidos</p>
+            <p className="text-3xl font-black">{totalGlobalPedidos}</p>
           </div>
-          <div className="bg-white dark:bg-white/5 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-white/5">
-            <p className="text-[10px] font-black uppercase text-gray-400 mb-2">GMV Total (Vendas)</p>
-            <p className="text-3xl font-black text-primary">R$ {totalGlobalVendas.toFixed(2)}</p>
+          <div className="bg-white dark:bg-white/5 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-white/5 text-center">
+            <p className="text-[10px] font-black uppercase text-gray-400 mb-2">Vendas Totais</p>
+            <p className="text-3xl font-black text-green-500">R$ {totalGlobalVendas.toFixed(2)}</p>
           </div>
         </section>
 
         {/* Store Management List */}
         <section className="space-y-4">
-          <h3 className="text-lg font-black px-1">Gerenciar Clientes (Lanchonetes)</h3>
+          <h3 className="text-lg font-black px-1">Gerenciar Clientes</h3>
           <div className="grid gap-4">
-            {stores.length === 0 ? (
-              <div className="py-20 text-center opacity-30 italic">Nenhum cliente cadastrado ainda.</div>
-            ) : (
-              stores.map(store => (
-                <div key={store.id} className="bg-white dark:bg-white/5 p-5 rounded-3xl border border-gray-100 dark:border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4 group hover:border-primary/20 transition-all">
+            {stores.map(store => (
+              <div key={store.id} className="bg-white dark:bg-white/5 p-5 rounded-3xl border border-gray-100 dark:border-white/5 flex flex-col gap-4 group">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
-                    <div className="size-12 bg-primary/10 rounded-2xl flex items-center justify-center font-black text-primary group-hover:bg-primary group-hover:text-white transition-colors">
+                    <div className="size-12 bg-primary/10 rounded-2xl flex items-center justify-center font-black text-primary">
                       {store.name.charAt(0)}
                     </div>
                     <div>
                       <h4 className="font-black text-lg">{store.name}</h4>
-                      <p className="text-xs text-gray-400">Slug: @{store.slug} • Criado em: {new Date(store.createdAt).toLocaleDateString()}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-6 bg-gray-50 dark:bg-white/5 p-3 rounded-2xl md:bg-transparent md:p-0">
-                    <div className="text-center md:text-right">
-                      <p className="text-[10px] font-black uppercase text-gray-400">Vendas</p>
-                      <p className="text-sm font-bold">R$ {(store.orders?.reduce((sum, o) => o.status !== 'Cancelled' ? sum + o.total : sum, 0) || 0).toFixed(2)}</p>
-                    </div>
-                    <div className="text-center md:text-right">
-                      <p className="text-[10px] font-black uppercase text-gray-400">Pedidos</p>
-                      <p className="text-sm font-bold">{store.orders?.length || 0}</p>
+                      <p className="text-xs text-gray-400">@{store.slug} • Whats: {store.whatsapp}</p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <button 
-                      onClick={() => onViewStore(store)}
-                      className="flex-1 md:flex-none px-4 py-2 bg-gray-100 dark:bg-white/10 text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-primary/10 hover:text-primary transition-all"
-                    >
-                      Acessar Loja
+                    <button onClick={() => setEditingStoreId(editingStoreId === store.id ? null : store.id)} className="px-4 py-2 bg-gray-100 dark:bg-white/10 text-[10px] font-black uppercase rounded-xl hover:bg-primary/10">
+                      {editingStoreId === store.id ? 'Fechar' : 'Gerenciar Senha'}
                     </button>
-                    <button 
-                      onClick={() => { if(confirm(`Excluir a lanchonete "${store.name}" permanentemente?`)) onDeleteStore(store.id); }}
-                      className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-all"
-                    >
+                    <button onClick={() => onViewStore(store)} className="px-4 py-2 bg-primary/10 text-primary text-[10px] font-black uppercase rounded-xl">
+                      Ver Cardápio
+                    </button>
+                    <button onClick={() => { if(confirm("Excluir definitivamente?")) onDeleteStore(store.id); }} className="p-2 text-red-500 bg-red-50 dark:bg-red-500/10 rounded-xl">
                       <span className="material-symbols-outlined text-sm">delete</span>
                     </button>
                   </div>
                 </div>
-              ))
-            )}
+
+                {editingStoreId === store.id && (
+                  <div className="mt-2 p-5 bg-gray-50 dark:bg-black/20 rounded-2xl border border-primary/10 animate-in zoom-in-95 duration-300">
+                    <div className="flex flex-col md:flex-row items-end gap-4">
+                      <div className="flex-1 space-y-1.5">
+                         <label className="text-[10px] font-black uppercase text-primary">Senha Atual Cadastrada:</label>
+                         <div className="bg-white dark:bg-white/5 p-3 rounded-xl font-mono text-sm border border-gray-100 dark:border-white/10 flex justify-between">
+                            <span>{store.adminPassword}</span>
+                            <span className="material-symbols-outlined text-xs text-gray-300">key</span>
+                         </div>
+                      </div>
+                      <div className="flex-1 space-y-1.5">
+                         <label className="text-[10px] font-black uppercase text-gray-400">Definir Nova Senha:</label>
+                         <input 
+                           type="text" 
+                           value={storeNewPass} 
+                           onChange={(e) => setStoreNewPass(e.target.value)} 
+                           placeholder="Nova senha para o cliente"
+                           className="w-full bg-white dark:bg-white/5 border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20"
+                         />
+                      </div>
+                      <button 
+                        onClick={() => { if(storeNewPass) { onUpdateStorePassword(store.id, storeNewPass); setStoreNewPass(''); setEditingStoreId(null); } }}
+                        className="bg-primary text-white text-[10px] font-black uppercase px-6 py-3.5 rounded-xl shadow-lg shadow-primary/20"
+                      >
+                        Resetar Senha
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </section>
       </main>
