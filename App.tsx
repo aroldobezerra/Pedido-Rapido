@@ -36,8 +36,9 @@ const App: React.FC = () => {
     pickupTime: ''
   });
 
-  // 1. Inicialização e Roteamento via Slug
+  // 1. Inicialização
   useEffect(() => {
+    // Só mostramos erro se não houver NENHUMA chave (env ou fallback)
     if (!isSupabaseConfigured()) {
       setMissingKeys(getMissingConfigKeys());
       setConfigError(true);
@@ -52,7 +53,10 @@ const App: React.FC = () => {
           .from('stores')
           .select('*, products(*), orders(*)');
         
-        if (storesError) throw storesError;
+        if (storesError) {
+          console.warn("Erro ao buscar lojas (pode ser falta de tabelas):", storesError);
+        }
+        
         const allStores = storesData || [];
         setStores(allStores);
 
@@ -70,15 +74,20 @@ const App: React.FC = () => {
           }
         }
 
-        const { data: configData } = await supabase
-          .from('saas_config')
-          .select('value')
-          .eq('key', 'master_password')
-          .maybeSingle();
-        if (configData) setSaasPassword(configData.value);
+        // Tenta buscar senha master se a tabela existir
+        try {
+          const { data: configData } = await supabase
+            .from('saas_config')
+            .select('value')
+            .eq('key', 'master_password')
+            .maybeSingle();
+          if (configData) setSaasPassword(configData.value);
+        } catch (e) {
+          console.log("Tabela saas_config ainda não criada.");
+        }
 
       } catch (e) {
-        console.error("Erro na inicialização:", e);
+        console.error("Erro crítico na inicialização:", e);
       } finally {
         setIsLoading(false);
       }
@@ -86,6 +95,7 @@ const App: React.FC = () => {
     initApp();
   }, []);
 
+  // Sincroniza URL com a loja atual
   useEffect(() => {
     if (currentStore && (view === 'MENU' || view === 'ADMIN')) {
       const url = new URL(window.location.href);
@@ -96,9 +106,9 @@ const App: React.FC = () => {
     }
   }, [currentStore, view]);
 
-  // 2. CONFIGURAÇÃO REAL-TIME
+  // Real-time updates
   useEffect(() => {
-    if (!isSupabaseConfigured() || configError) return;
+    if (!isSupabaseConfigured()) return;
 
     const ordersChannel = supabase
       .channel('realtime-orders')
@@ -137,7 +147,7 @@ const App: React.FC = () => {
       .subscribe();
 
     return () => { supabase.removeChannel(ordersChannel); };
-  }, [currentStore?.id, currentOrder?.id, configError]);
+  }, [currentStore?.id, currentOrder?.id]);
 
   const handleRegisterStore = async (newStore: Store) => {
     setIsLoading(true);
@@ -168,7 +178,7 @@ const App: React.FC = () => {
         setCurrentStore(fullStore);
         setView('MENU');
       }
-    } catch (err) { alert("Erro ao registrar loja."); } 
+    } catch (err) { alert("Erro ao registrar loja. Verifique se o banco de dados está pronto."); } 
     finally { setIsLoading(false); }
   };
 
@@ -234,7 +244,7 @@ const App: React.FC = () => {
       setCurrentOrder({ ...newOrder, estimatedArrival: '20-30 min', timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
       setCart([]);
       setView('TRACK');
-    } catch (e) { alert("Erro ao enviar pedido."); }
+    } catch (e) { alert("Erro ao enviar pedido para o banco."); }
   };
 
   const subtotal = useMemo(() => cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0), [cart]);
@@ -245,12 +255,12 @@ const App: React.FC = () => {
         <div className="max-w-md w-full bg-white dark:bg-[#1e1e1e] p-10 rounded-[3rem] border-2 border-primary/20 text-center shadow-2xl space-y-6">
           <span className="material-symbols-outlined text-6xl text-primary">warning</span>
           <div className="space-y-2">
-            <h2 className="text-2xl font-black">Ambiente não configurado</h2>
-            <p className="text-xs text-gray-500 font-medium px-4">Não conseguimos encontrar as chaves necessárias no seu painel da Vercel.</p>
+            <h2 className="text-2xl font-black">Configuração Pendente</h2>
+            <p className="text-xs text-gray-500 font-medium px-4">Não conseguimos detectar as chaves de conexão.</p>
           </div>
           
           <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-2xl text-left space-y-3">
-             <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Variáveis Faltando:</p>
+             <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Atenção:</p>
              <ul className="space-y-2">
                 {missingKeys.map(key => (
                   <li key={key} className="flex items-center gap-2 text-xs font-bold text-red-500">
@@ -262,11 +272,11 @@ const App: React.FC = () => {
           </div>
 
           <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
-            Certifique-se de adicionar as chaves acima em <b>Settings > Environment Variables</b> na Vercel e fazer um <b>Redeploy</b>.
+            Certifique-se de que a <b>API_KEY</b> do Gemini está configurada nas variáveis de ambiente da Vercel.
           </p>
 
           <button onClick={() => window.location.reload()} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20">
-            Tentar Novamente
+            Recarregar App
           </button>
         </div>
       </div>
@@ -290,8 +300,8 @@ const App: React.FC = () => {
         <div className="max-w-md w-full text-center space-y-6">
           <span className="material-symbols-outlined text-8xl text-gray-300">error</span>
           <h2 className="text-3xl font-black">Lanchonete não encontrada</h2>
-          <p className="text-gray-500">Verifique se o link está correto.</p>
-          <button onClick={() => { setStoreNotFound(false); setView('HOME'); window.history.replaceState({}, '', '/'); }} className="w-full bg-primary text-white font-black py-4 rounded-2xl">Voltar</button>
+          <p className="text-gray-500">O identificador na URL não existe no banco.</p>
+          <button onClick={() => { setStoreNotFound(false); setView('HOME'); window.history.replaceState({}, '', '/'); }} className="w-full bg-primary text-white font-black py-4 rounded-2xl">Voltar ao Início</button>
         </div>
       </div>
     );
