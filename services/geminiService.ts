@@ -2,13 +2,20 @@
 import { GoogleGenAI } from "@google/genai";
 
 /**
- * Serviço especializado em IA para o SnackDash.
- * Utiliza os modelos Gemini mais recentes para geração de imagens e textos.
+ * Utilitário para buscar variáveis de ambiente com segurança
  */
+const getEnv = (key: string) => {
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env[key] || process.env[`VITE_${key}`] || process.env[`NEXT_PUBLIC_${key}`] || null;
+  }
+  return null;
+};
 
 export const generateProductImage = async (prompt: string, aspectRatio: "1:1" | "16:9" | "9:16" | "4:3" = "1:1") => {
-  // Inicialização dinâmica para garantir que use a API_KEY mais recente
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  const apiKey = getEnv('API_KEY');
+  if (!apiKey) throw new Error("API_KEY do Gemini não configurada.");
+
+  const ai = new GoogleGenAI({ apiKey });
   
   try {
     const response = await ai.models.generateContent({
@@ -25,7 +32,6 @@ export const generateProductImage = async (prompt: string, aspectRatio: "1:1" | 
       }
     });
 
-    // Procura pela parte da imagem no retorno
     const imagePart = response.candidates?.[0]?.content?.parts.find(part => part.inlineData);
     
     if (imagePart?.inlineData) {
@@ -40,7 +46,10 @@ export const generateProductImage = async (prompt: string, aspectRatio: "1:1" | 
 };
 
 export const getSmartProductDescription = async (productName: string) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  const apiKey = getEnv('API_KEY');
+  if (!apiKey) return "";
+
+  const ai = new GoogleGenAI({ apiKey });
   
   try {
     const response = await ai.models.generateContent({

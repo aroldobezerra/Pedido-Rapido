@@ -31,10 +31,11 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
 
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
-      const matchesCategory = p.category === activeCategory;
+      // Normalização para evitar erros de case-sensitive no banco
+      const matchesCategory = String(p.category).toLowerCase() === String(activeCategory).toLowerCase();
       const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           p.description.toLowerCase().includes(searchQuery.toLowerCase());
-      return p.isAvailable && matchesCategory && matchesSearch;
+      return (p.isAvailable !== false) && matchesCategory && matchesSearch;
     });
   }, [products, activeCategory, searchQuery]);
 
@@ -105,30 +106,38 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
       <main className="px-4 space-y-8 mt-6 max-w-lg mx-auto w-full">
         <section className="space-y-4">
           <h2 className="text-xl font-black tracking-tight px-1">{activeCategory}</h2>
+          
           <div className="grid gap-6">
-            {filteredProducts.map(product => (
-              <div key={product.id} className="flex flex-col bg-white dark:bg-[#2d2218] rounded-3xl overflow-hidden shadow-sm border border-[#e8dbce]/50 dark:border-[#3d2b1d] group hover:shadow-xl transition-all duration-300">
-                <div 
-                  className="h-52 w-full bg-center bg-cover transition-transform duration-700 group-hover:scale-105" 
-                  style={{ backgroundImage: `url('${product.image}')` }}
-                ></div>
-                <div className="p-5 flex flex-col gap-2 bg-white dark:bg-[#2d2218]">
-                  <div className="flex justify-between items-start">
-                    <h3 className="font-black text-lg leading-tight">{product.name}</h3>
-                    <span className="font-black text-primary text-lg">R$ {product.price.toFixed(2)}</span>
-                  </div>
-                  <p className="text-sm text-[#9c7349] dark:text-[#cbb094] line-clamp-2 leading-relaxed">{product.description}</p>
-                  <button 
-                    onClick={() => onAddToCart(product)}
-                    disabled={!isOpen}
-                    className={`mt-4 w-full text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg ${isOpen ? 'bg-primary shadow-primary/20' : 'bg-gray-400 opacity-50 cursor-not-allowed'}`}
-                  >
-                    <span className="material-symbols-outlined">add_shopping_cart</span>
-                    {isOpen ? 'Adicionar ao Pedido' : 'Loja Fechada'}
-                  </button>
-                </div>
+            {filteredProducts.length === 0 ? (
+              <div className="py-20 flex flex-col items-center justify-center text-center opacity-40">
+                 <span className="material-symbols-outlined text-6xl mb-4">info</span>
+                 <p className="font-bold text-sm">Nenhum produto disponível em {activeCategory} no momento.</p>
               </div>
-            ))}
+            ) : (
+              filteredProducts.map(product => (
+                <div key={product.id} className="flex flex-col bg-white dark:bg-[#2d2218] rounded-3xl overflow-hidden shadow-sm border border-[#e8dbce]/50 dark:border-[#3d2b1d] group hover:shadow-xl transition-all duration-300">
+                  <div 
+                    className="h-52 w-full bg-center bg-cover transition-transform duration-700 group-hover:scale-105" 
+                    style={{ backgroundImage: `url('${product.image}')` }}
+                  ></div>
+                  <div className="p-5 flex flex-col gap-2 bg-white dark:bg-[#2d2218]">
+                    <div className="flex justify-between items-start">
+                      <h3 className="font-black text-lg leading-tight">{product.name}</h3>
+                      <span className="font-black text-primary text-lg">R$ {product.price.toFixed(2)}</span>
+                    </div>
+                    <p className="text-sm text-[#9c7349] dark:text-[#cbb094] line-clamp-2 leading-relaxed">{product.description}</p>
+                    <button 
+                      onClick={() => onAddToCart(product)}
+                      disabled={!isOpen}
+                      className={`mt-4 w-full text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg ${isOpen ? 'bg-primary shadow-primary/20' : 'bg-gray-400 opacity-50 cursor-not-allowed'}`}
+                    >
+                      <span className="material-symbols-outlined">add_shopping_cart</span>
+                      {isOpen ? 'Adicionar ao Pedido' : 'Loja Fechada'}
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </section>
       </main>

@@ -37,6 +37,16 @@ const App: React.FC = () => {
     pickupTime: ''
   });
 
+  // Função robusta de mapeamento
+  const mapProduct = (p: any): Product => ({
+    ...p,
+    id: String(p.id),
+    isAvailable: p.is_available ?? p.isAvailable ?? true,
+    trackInventory: p.track_inventory ?? p.trackInventory ?? false,
+    extras: p.extras || [],
+    category: p.category as Category
+  });
+
   // 1. Inicialização
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -53,15 +63,14 @@ const App: React.FC = () => {
           .from('stores')
           .select('*, products(*), orders(*)');
         
-        if (storesError) {
-          console.error("Erro ao buscar lojas:", storesError);
-        }
+        if (storesError) console.error("Erro Supabase:", storesError);
         
-        // Mapear campos do banco (snake_case) para o objeto interno (camelCase)
         const allStores = (storesData || []).map((s: any) => ({
           ...s,
-          adminPassword: s.admin_password || s.adminPassword, // Garante compatibilidade
-          isOpen: s.is_open ?? true
+          adminPassword: s.admin_password || s.adminPassword || "", 
+          isOpen: s.is_open ?? true,
+          products: (s.products || []).map(mapProduct),
+          orders: s.orders || []
         }));
         
         setStores(allStores);
@@ -80,16 +89,8 @@ const App: React.FC = () => {
           }
         }
 
-        try {
-          const { data: configData } = await supabase
-            .from('saas_config')
-            .select('value')
-            .eq('key', 'master_password')
-            .maybeSingle();
-          if (configData) setSaasPassword(configData.value);
-        } catch (e) {
-          // Tabela config pode não existir
-        }
+        const { data: configData } = await supabase.from('saas_config').select('value').eq('key', 'master_password').maybeSingle();
+        if (configData) setSaasPassword(configData.value);
 
       } catch (e) {
         console.error("Erro crítico na inicialização:", e);
@@ -100,18 +101,6 @@ const App: React.FC = () => {
     initApp();
   }, []);
 
-  // Sincronizar link da URL
-  useEffect(() => {
-    if (currentStore && (view === 'MENU' || view === 'ADMIN')) {
-      const url = new URL(window.location.href);
-      if (url.searchParams.get('s') !== currentStore.slug) {
-        url.searchParams.set('s', currentStore.slug);
-        window.history.replaceState({}, '', url.toString());
-      }
-    }
-  }, [currentStore, view]);
-
-  // Registro de Loja
   const handleRegisterStore = async (newStore: Store) => {
     setIsLoading(true);
     try {
@@ -119,16 +108,13 @@ const App: React.FC = () => {
         name: newStore.name,
         slug: newStore.slug,
         whatsapp: newStore.whatsapp,
-        admin_password: newStore.adminPassword, // Importante: salva no campo correto
+        admin_password: newStore.adminPassword,
         is_open: true
       }]).select().single();
       
-      if (storeError) {
-        if (storeError.code === '23505') throw new Error("Link @"+newStore.slug+" já existe.");
-        throw storeError;
-      }
+      if (storeError) throw storeError;
 
-      const { error: productsError } = await supabase.from('products').insert(newStore.products.map(p => ({
+      await supabase.from('products').insert(newStore.products.map(p => ({
         store_id: storeData.id,
         name: p.name,
         price: p.price,
@@ -138,60 +124,48 @@ const App: React.FC = () => {
         is_available: true
       })));
 
-      if (productsError) throw productsError;
-
       const { data: fullStore } = await supabase.from('stores').select('*, products(*), orders(*)').eq('id', storeData.id).single();
       if (fullStore) {
-        const mapped = { ...fullStore, adminPassword: fullStore.admin_password, isOpen: fullStore.is_open };
+        const mapped = { ...fullStore, adminPassword: fullStore.admin_password, isOpen: fullStore.is_open, products: fullStore.products.map(mapProduct) };
         setStores(prev => [...prev, mapped]);
         setCurrentStore(mapped);
         setView('MENU');
       }
-    } catch (err: any) { 
-      alert(`⚠️ ${err.message || "Erro no cadastro"}`); 
-    } finally { setIsLoading(false); }
+    } catch (err: any) { alert("Erro no cadastro: " + err.message); } 
+    finally { setIsLoading(false); }
   };
 
-  const handleUpdateStorePassword = async (storeId: string, newPass: string) => {
-    const { error } = await supabase.from('stores').update({ admin_password: newPass }).eq('id', storeId);
+  const handleUpdateStorePassword = async (id: string, pass: string) => {
+    const { error } = await supabase.from('stores').update({ admin_password: pass }).eq('id', id);
     if (!error) {
-      setStores(prev => prev.map(s => s.id === storeId ? { ...s, adminPassword: newPass } : s));
-      alert("Senha da lanchonete atualizada!");
-    } else {
-      alert("Erro ao atualizar senha.");
+      const updatedStores = stores.map(s => s.id === id ? { ...s, adminPassword: pass } : s);
+      setStores(updatedStores);
+      if (currentStore?.id === id) setCurrentStore({ ...currentStore, adminPassword: pass });
     }
   };
 
   const handleUpdateStoreStatus = async (isOpen: boolean) => {
     if (!currentStore) return;
     const { error } = await supabase.from('stores').update({ is_open: isOpen }).eq('id', currentStore.id);
-    if (!error) setCurrentStore({ ...currentStore, isOpen });
+    if (!error) {
+      const updatedStore = { ...currentStore, isOpen };
+      setCurrentStore(updatedStore);
+      setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
+    }
   };
 
   const handleUpdateStoreSettings = async (updates: any) => {
     if (!currentStore) return;
-    const dbUpdates: any = { ...updates };
+    const dbUpdates: any = {};
+    if (updates.whatsapp) dbUpdates.whatsapp = updates.whatsapp;
     if (updates.admin_password) dbUpdates.admin_password = updates.admin_password;
-    
     const { error } = await supabase.from('stores').update(dbUpdates).eq('id', currentStore.id);
     if (!error) {
-      setCurrentStore({ ...currentStore, ...updates, adminPassword: updates.admin_password || currentStore.adminPassword });
-      alert("Ajustes salvos!");
+      const updatedStore = { ...currentStore, ...updates, adminPassword: updates.admin_password || currentStore.adminPassword };
+      setCurrentStore(updatedStore);
+      setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
+      alert("Ajustes salvos com sucesso!");
     }
-  };
-
-  const handleUpdateSaaSPassword = async (newPass: string) => {
-    const { error } = await supabase.from('saas_config').upsert({ key: 'master_password', value: newPass });
-    if (!error) setSaasPassword(newPass);
-  };
-
-  const handleDeleteStore = async (id: string) => {
-    const { error } = await supabase.from('stores').delete().eq('id', id);
-    if (!error) setStores(prev => prev.filter(s => s.id !== id));
-  };
-
-  const handleUpdateOrderStatus = async (id: string, status: OrderStatus) => {
-    await supabase.from('orders').update({ status }).eq('id', id);
   };
 
   const subtotal = useMemo(() => cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0), [cart]);
@@ -205,27 +179,16 @@ const App: React.FC = () => {
       {view === 'SAAS_LOGIN' && (
         <div className="min-h-screen flex items-center justify-center p-6">
            <div className="max-w-xs w-full space-y-6">
-              <div className="text-center"><h2 className="text-2xl font-black text-primary">Admin Master</h2></div>
+              <h2 className="text-2xl font-black text-primary text-center">Admin Master</h2>
               <input type="password" value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError(''); }} placeholder="Senha Master" className="w-full p-4 rounded-2xl border bg-white dark:bg-white/5 border-primary/20" />
               {loginError && <p className="text-xs font-bold text-red-500 text-center">{loginError}</p>}
-              <button onClick={() => { if(loginPassword.trim() === saasPassword) { setView('SAAS_ADMIN'); setLoginPassword(''); } else setLoginError('Senha Master Incorreta'); }} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20">Entrar</button>
+              <button onClick={() => { if(loginPassword.trim() === saasPassword) { setView('SAAS_ADMIN'); setLoginPassword(''); } else setLoginError('Senha Incorreta'); }} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20">Entrar</button>
               <button onClick={() => setView('HOME')} className="w-full text-xs font-bold text-gray-400">Voltar</button>
            </div>
         </div>
       )}
 
-      {view === 'SAAS_ADMIN' && (
-        <SaaSAdminDashboard 
-          stores={stores} 
-          saasPassword={saasPassword} 
-          onUpdateSaaSPassword={handleUpdateSaaSPassword} 
-          onDeleteStore={handleDeleteStore} 
-          onUpdateStorePassword={handleUpdateStorePassword}
-          onBack={() => setView('HOME')} 
-          onViewStore={(s) => { setCurrentStore(s); setView('MENU'); }} 
-        />
-      )}
-
+      {view === 'SAAS_ADMIN' && <SaaSAdminDashboard stores={stores} saasPassword={saasPassword} onUpdateSaaSPassword={(p) => supabase.from('saas_config').upsert({key: 'master_password', value: p})} onDeleteStore={(id) => supabase.from('stores').delete().eq('id', id)} onUpdateStorePassword={handleUpdateStorePassword} onBack={() => setView('HOME')} onViewStore={(s) => { setCurrentStore(s); setView('MENU'); }} />}
       {view === 'REGISTER' && <RegisterStore onRegister={handleRegisterStore} onCancel={() => setView('HOME')} />}
 
       {view === 'MENU' && currentStore && (
@@ -237,26 +200,15 @@ const App: React.FC = () => {
       )}
 
       {view === 'CART' && <CartView items={cart} updateQuantity={(id, d) => setCart(prev => prev.map(i => i.product.id === id ? {...i, quantity: Math.max(0, i.quantity + d)} : i).filter(i => i.quantity > 0))} clearCart={() => setCart([])} onBack={() => setView('MENU')} onProceed={(m) => { setOrderMetadata(m); setView('REVIEW'); }} subtotal={subtotal} />}
-      {view === 'REVIEW' && <OrderReview items={cart} customerName={orderMetadata.customerName || ''} address={orderMetadata.address || ''} method={orderMetadata.deliveryMethod || 'Delivery'} tableNumber={orderMetadata.tableNumber} pickupTime={orderMetadata.pickupTime} orderNotes={orderMetadata.notes} onBack={() => setView('CART')} onConfirm={() => setView('TRACK')} subtotal={subtotal} />}
+      {view === 'REVIEW' && <OrderReview items={cart} customerName={orderMetadata.customerName || ''} address={orderMetadata.address || ''} method={orderMetadata.deliveryMethod || 'Delivery'} onBack={() => setView('CART')} onConfirm={() => setView('TRACK')} subtotal={subtotal} />}
       
       {view === 'ADMIN_LOGIN' && currentStore && (
         <div className="min-h-screen flex items-center justify-center p-6">
            <div className="max-w-xs w-full space-y-6">
-              <div className="text-center">
-                <h2 className="text-2xl font-black">{currentStore.name}</h2>
-                <p className="text-[10px] text-primary font-bold uppercase tracking-widest">Painel Administrativo</p>
-              </div>
+              <h2 className="text-2xl font-black text-center">{currentStore.name}</h2>
               <input type="password" value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError(''); }} placeholder="Senha da Lanchonete" className="w-full p-4 rounded-2xl border bg-white dark:bg-white/5 border-primary/20" />
               {loginError && <p className="text-xs font-bold text-red-500 text-center">{loginError}</p>}
-              <button onClick={() => { 
-                const trimmed = loginPassword.trim();
-                // Verifica a senha no objeto da loja atual
-                if(trimmed === currentStore.adminPassword) { 
-                  setIsAdminLoggedIn(true); setView('ADMIN'); setLoginPassword(''); 
-                } else {
-                  setLoginError('Senha Incorreta!');
-                }
-              }} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20">Entrar</button>
+              <button onClick={() => { if(loginPassword.trim() === currentStore.adminPassword) { setIsAdminLoggedIn(true); setView('ADMIN'); setLoginPassword(''); } else setLoginError('Senha Incorreta!'); }} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20">Acessar Cozinha</button>
               <button onClick={() => setView('MENU')} className="w-full text-xs font-bold text-gray-400">Voltar ao Cardápio</button>
            </div>
         </div>
@@ -264,15 +216,42 @@ const App: React.FC = () => {
 
       {view === 'ADMIN' && currentStore && (
         <AdminDashboard 
-          whatsappNumber={currentStore.whatsapp} isOpen={currentStore.isOpen} orders={currentStore.orders || []} onToggleStoreStatus={() => handleUpdateStoreStatus(!currentStore.isOpen)} onUpdateWhatsApp={(w) => handleUpdateStoreSettings({ whatsapp: w })} onUpdateOrderStatus={handleUpdateOrderStatus}
+          whatsappNumber={currentStore.whatsapp} isOpen={currentStore.isOpen} orders={currentStore.orders || []} onToggleStoreStatus={() => handleUpdateStoreStatus(!currentStore.isOpen)} onUpdateWhatsApp={(w) => handleUpdateStoreSettings({ whatsapp: w })} onUpdateOrderStatus={(id, st) => supabase.from('orders').update({status: st}).eq('id', id)}
           products={currentStore.products} onAddProduct={() => { setEditingProduct(null); setView('PRODUCT_FORM'); }} onEditProduct={(p) => { setEditingProduct(p); setView('PRODUCT_FORM'); }} onToggleAvailability={() => {}} onBack={() => { setView('MENU'); setIsAdminLoggedIn(false); }}
           onUpdatePassword={(p) => handleUpdateStoreSettings({ admin_password: p })}
         />
       )}
 
       {view === 'PRODUCT_FORM' && currentStore && <ProductForm product={editingProduct} onSave={async (p) => { 
-        const { error } = (p.id.length > 15 || p.id === 'new') ? await supabase.from('products').insert([{...p, id: undefined, store_id: currentStore.id}]) : await supabase.from('products').update({...p, id: undefined}).eq('id', p.id);
-        if(!error) { const {data} = await supabase.from('products').select('*').eq('store_id', currentStore.id); if(data) setCurrentStore({...currentStore, products: data as any}); setView('ADMIN'); }
+        const dbData = {
+          name: p.name,
+          price: p.price,
+          category: p.category,
+          description: p.description,
+          image: p.image,
+          is_available: p.isAvailable,
+          track_inventory: p.trackInventory,
+          extras: p.extras,
+          store_id: currentStore.id
+        };
+
+        const isNew = !p.id || p.id === 'new' || p.id.length > 15;
+        const { error } = isNew 
+          ? await supabase.from('products').insert([dbData]) 
+          : await supabase.from('products').update(dbData).eq('id', p.id);
+
+        if(!error) { 
+          const { data: updatedProducts } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
+          if (updatedProducts) {
+            const mapped = updatedProducts.map(mapProduct);
+            const updatedStore = { ...currentStore, products: mapped };
+            setCurrentStore(updatedStore);
+            setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
+          }
+          setView('ADMIN'); 
+        } else {
+          alert("Erro ao salvar produto: " + error.message);
+        }
       }} onCancel={() => setView('ADMIN')} />}
     </div>
   );
