@@ -9,7 +9,6 @@ interface HomeViewProps {
 const HomeView: React.FC<HomeViewProps> = ({ onRegister, onSaaSAdmin }) => {
   return (
     <div className="flex flex-col min-h-screen bg-background-light dark:bg-background-dark">
-      {/* SaaS Hero Section */}
       <section className="px-6 pt-16 pb-20 max-w-4xl mx-auto text-center">
         <div className="flex flex-col items-center mb-10">
           <div className="w-24 h-24 bg-primary rounded-[2.5rem] flex items-center justify-center shadow-2xl shadow-primary/30 mb-6 rotate-3 hover:rotate-0 transition-transform duration-500">
@@ -38,7 +37,6 @@ const HomeView: React.FC<HomeViewProps> = ({ onRegister, onSaaSAdmin }) => {
         </div>
       </section>
 
-      {/* Feature Grid */}
       <section id="beneficios" className="px-6 py-20 bg-white dark:bg-white/5 border-y border-gray-100 dark:border-white/5">
         <div className="max-w-5xl mx-auto grid md:grid-cols-3 gap-12">
           <div className="space-y-4">
@@ -65,20 +63,8 @@ const HomeView: React.FC<HomeViewProps> = ({ onRegister, onSaaSAdmin }) => {
         </div>
       </section>
 
-      {/* Social Proof / Stats */}
-      <section className="px-6 py-16 max-w-4xl mx-auto text-center opacity-40">
-        <p className="text-[10px] font-black uppercase tracking-[0.5em] mb-8">Empoderando centenas de empreendedores</p>
-        <div className="flex flex-wrap justify-center gap-8 md:gap-16">
-          <span className="font-black text-2xl italic tracking-tighter">BurgerFlow</span>
-          <span className="font-black text-2xl italic tracking-tighter">FastBites</span>
-          <span className="font-black text-2xl italic tracking-tighter">GourmetEase</span>
-          <span className="font-black text-2xl italic tracking-tighter">SnackPro</span>
-        </div>
-      </section>
-
-      {/* SaaS Owner Footer */}
       <footer className="mt-auto py-10 px-6 flex flex-col items-center gap-4">
-        <p className="text-xs text-gray-400 font-medium">© 2024 SnackDash AI - A tecnologia por trás do seu sucesso.</p>
+        <p className="text-xs text-gray-400 font-medium">© 2024 Pedido Rápido AI - A tecnologia por trás do seu sucesso.</p>
         <button 
           onClick={onSaaSAdmin}
           className="text-[10px] font-bold uppercase tracking-widest text-gray-300 hover:text-primary transition-colors flex items-center gap-2"

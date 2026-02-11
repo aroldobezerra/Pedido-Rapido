@@ -1,10 +1,10 @@
 
 export enum Category {
-  BURGERS = 'Burgers',
-  HOTDOGS = 'Hot Dogs',
-  SIDES = 'Sides',
-  DRINKS = 'Drinks',
-  DESSERTS = 'Desserts',
+  BURGERS = 'Hambúrgueres',
+  HOTDOGS = 'Cachorro Quente',
+  SIDES = 'Acompanhamentos',
+  DRINKS = 'Bebidas',
+  DESSERTS = 'Sobremesas',
   COMBOS = 'Combos'
 }
 
@@ -49,7 +49,6 @@ export type OrderStatus = 'Received' | 'Preparing' | 'Ready' | 'Delivered' | 'Ca
 
 export interface Order {
   id: string;
-  // Added store_id to fix TS error when accessing it from Supabase realtime payloads
   store_id: string;
   items: CartItem[];
   status: OrderStatus;

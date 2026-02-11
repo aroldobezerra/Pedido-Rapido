@@ -41,7 +41,6 @@ const OrderTracking: React.FC<OrderTrackingProps> = ({ order, onBack }) => {
         </div>
 
         <div className="px-6 space-y-8 relative">
-          {/* Step 1 */}
           <div className="flex gap-4">
             <div className="flex flex-col items-center">
               <div className={`size-10 rounded-full flex items-center justify-center border-2 transition-all ${currentStep >= 1 ? 'bg-green-500 border-green-500 text-white' : 'border-gray-200 text-gray-300'}`}>
@@ -55,7 +54,6 @@ const OrderTracking: React.FC<OrderTrackingProps> = ({ order, onBack }) => {
             </div>
           </div>
 
-          {/* Step 2 */}
           <div className="flex gap-4">
             <div className="flex flex-col items-center">
               <div className={`size-10 rounded-full flex items-center justify-center border-2 transition-all ${currentStep >= 2 ? 'bg-primary border-primary text-white shadow-lg shadow-primary/20 animate-pulse' : 'border-gray-200 text-gray-300'}`}>
@@ -69,7 +67,6 @@ const OrderTracking: React.FC<OrderTrackingProps> = ({ order, onBack }) => {
             </div>
           </div>
 
-          {/* Step 3 */}
           <div className="flex gap-4">
             <div className="flex flex-col items-center">
               <div className={`size-10 rounded-full flex items-center justify-center border-2 transition-all ${currentStep >= 3 ? 'bg-green-500 border-green-500 text-white' : 'border-gray-200 text-gray-300'}`}>
@@ -82,7 +79,6 @@ const OrderTracking: React.FC<OrderTrackingProps> = ({ order, onBack }) => {
             </div>
           </div>
 
-          {/* Step 4 */}
           <div className="flex gap-4">
             <div className="flex flex-col items-center">
               <div className={`size-10 rounded-full flex items-center justify-center border-2 transition-all ${currentStep >= 4 ? 'bg-green-500 border-green-500 text-white' : 'border-gray-200 text-gray-300'}`}>
