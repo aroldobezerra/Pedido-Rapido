@@ -15,6 +15,7 @@ interface AdminDashboardProps {
   products: Product[];
   onAddProduct: () => void;
   onEditProduct: (p: Product) => void;
+  onDeleteProduct: (id: string) => void;
   onToggleAvailability: (id: string) => void;
   onBack: () => void;
   onUpdatePassword: (p: string) => void;
@@ -22,13 +23,12 @@ interface AdminDashboardProps {
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
   slug, customDomain, whatsappNumber, isOpen, orders, onToggleStoreStatus, onUpdateWhatsApp, onUpdateStoreSettings, onUpdateOrderStatus,
-  products, onAddProduct, onEditProduct, onToggleAvailability, onBack, onUpdatePassword
+  products, onAddProduct, onEditProduct, onDeleteProduct, onToggleAvailability, onBack, onUpdatePassword
 }) => {
   const [activeTab, setActiveTab] = useState<'KITCHEN' | 'PRODUCTS' | 'STATS' | 'SETTINGS'>('KITCHEN');
   const [copied, setCopied] = useState(false);
   
   const [newWA, setNewWA] = useState(whatsappNumber);
-  const [newDomain, setNewDomain] = useState(customDomain || 'https://pedido-rapido.vercel.app');
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
 
@@ -51,15 +51,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const activeOrders = orders.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled');
 
-  const storeLink = useMemo(() => {
-    // Se o usuário já salvou um domínio nos ajustes, usamos ele.
-    // Caso contrário, usamos a URL atual mas avisamos que é de teste.
-    const base = (customDomain && customDomain.trim() !== '') 
-      ? customDomain.trim().replace(/\/$/, '') 
-      : 'https://pedido-rapido.vercel.app'; // Default sugerido para divulgação
-      
-    return `${base}/?s=${slug}`;
-  }, [slug, customDomain]);
+  // Link fixo conforme solicitado para divulgação direta
+  const storeLink = `https://pedido-rapido.vercel.app/?s=${slug}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(storeLink);
@@ -72,10 +65,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     
     if (newWA !== whatsappNumber) {
       updates.whatsapp = newWA.replace(/\D/g, '');
-    }
-    
-    if (newDomain !== (customDomain || '')) {
-      updates.customDomain = newDomain.trim();
     }
     
     if (newPass) {
@@ -193,18 +182,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="bg-white dark:bg-white/5 p-6 rounded-3xl border border-primary/20 shadow-sm space-y-4">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary">qr_code_2</span>
-                <h4 className="text-xs font-black uppercase text-primary tracking-widest">Link para Divulgação</h4>
+                <h4 className="text-xs font-black uppercase text-primary tracking-widest">Seu Link de Vendas</h4>
               </div>
-              <div className="bg-gray-50 dark:bg-black/20 p-4 rounded-2xl text-[11px] font-mono break-all border border-gray-100 dark:border-white/5 text-gray-500">
+              <div className="bg-gray-50 dark:bg-black/20 p-4 rounded-2xl text-[12px] font-mono break-all border border-gray-100 dark:border-white/5 text-gray-500">
                 {storeLink}
               </div>
-              
-              {!customDomain && (
-                 <p className="text-[9px] text-[#9c7349] font-bold uppercase tracking-tight px-1">
-                   ⚠️ Link de teste detectado. Configure seu domínio em "Ajustes" para gerar o link final.
-                 </p>
-              )}
-
               <button 
                 onClick={handleCopyLink}
                 className={`w-full py-4 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2 active:scale-95 ${copied ? 'bg-green-500 text-white' : 'bg-primary text-white shadow-xl shadow-primary/20'}`}
@@ -233,15 +215,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="space-y-3">
               <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest px-1">Itens Atuais</h4>
               {products.map(p => (
-                <div key={p.id} className="bg-white dark:bg-white/5 p-3 rounded-2xl border border-gray-100 dark:border-white/10 flex items-center gap-4">
+                <div key={p.id} className="bg-white dark:bg-white/5 p-3 rounded-2xl border border-gray-100 dark:border-white/10 flex items-center gap-4 group">
                   <div className="size-14 bg-cover bg-center rounded-xl shrink-0" style={{ backgroundImage: `url('${p.image}')` }}></div>
                   <div className="flex-1 min-w-0">
                     <p className="font-bold text-sm truncate">{p.name}</p>
                     <p className="text-primary font-bold text-xs">R$ {p.price.toFixed(2)}</p>
                   </div>
-                  <button onClick={() => onEditProduct(p)} className="p-3 bg-gray-100 dark:bg-white/10 rounded-xl text-primary active:scale-90 transition-all">
-                    <span className="material-symbols-outlined text-sm">edit</span>
-                  </button>
+                  <div className="flex gap-1.5">
+                    <button onClick={() => onEditProduct(p)} className="p-3 bg-gray-100 dark:bg-white/10 rounded-xl text-primary active:scale-90 transition-all">
+                      <span className="material-symbols-outlined text-sm">edit</span>
+                    </button>
+                    <button onClick={() => onDeleteProduct(p.id)} className="p-3 bg-red-50 dark:bg-red-500/10 rounded-xl text-red-500 active:scale-90 transition-all">
+                      <span className="material-symbols-outlined text-sm">delete</span>
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -298,20 +285,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <div className="space-y-4">
                    <div className="flex flex-col gap-2">
-                      <label className="text-[10px] font-black uppercase text-gray-400 px-1">Domínio Oficial do Cardápio</label>
-                      <input 
-                        type="url"
-                        value={newDomain}
-                        onChange={(e) => setNewDomain(e.target.value)}
-                        className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4 font-bold text-primary"
-                        placeholder="Ex: https://pedido-rapido.vercel.app"
-                      />
-                      <p className="text-[9px] text-[#9c7349] px-1 font-bold">DICA: Use sua URL final aqui para que o botão de copiar link gere o endereço correto para os clientes.</p>
-                   </div>
-
-                   <hr className="border-gray-100 dark:border-white/5" />
-
-                   <div className="flex flex-col gap-2">
                       <label className="text-[10px] font-black uppercase text-gray-400 px-1">WhatsApp de Vendas (DDD + Número)</label>
                       <input 
                         type="tel"
@@ -325,15 +298,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                    <hr className="border-gray-100 dark:border-white/5" />
 
                    <div className="space-y-4">
-                      <p className="text-[10px] font-black uppercase text-primary tracking-widest px-1">Trocar Senha da Cozinha</p>
+                      <p className="text-[10px] font-black uppercase text-primary tracking-widest px-1">Segurança do Painel</p>
                       <div className="flex flex-col gap-2">
-                         <label className="text-[10px] font-black uppercase text-gray-400 px-1">Nova Senha</label>
+                         <label className="text-[10px] font-black uppercase text-gray-400 px-1">Trocar Senha da Cozinha</label>
                          <input 
                            type="password"
                            value={newPass}
                            onChange={(e) => setNewPass(e.target.value)}
                            className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4"
-                           placeholder="Mínimo 6 caracteres"
+                           placeholder="Nova senha (deixe em branco para não alterar)"
                          />
                       </div>
                       <div className="flex flex-col gap-2">
@@ -343,7 +316,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                            value={confirmPass}
                            onChange={(e) => setConfirmPass(e.target.value)}
                            className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4"
-                           placeholder="Confirme sua senha"
+                           placeholder="Confirme a nova senha"
                          />
                       </div>
                    </div>

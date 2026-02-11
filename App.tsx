@@ -135,15 +135,6 @@ const App: React.FC = () => {
     finally { setIsLoading(false); }
   };
 
-  const handleUpdateStorePassword = async (id: string, pass: string) => {
-    const { error } = await supabase.from('stores').update({ admin_password: pass }).eq('id', id);
-    if (!error) {
-      const updatedStores = stores.map(s => s.id === id ? { ...s, adminPassword: pass } : s);
-      setStores(updatedStores);
-      if (currentStore?.id === id) setCurrentStore({ ...currentStore, adminPassword: pass });
-    }
-  };
-
   const handleUpdateStoreStatus = async (isOpen: boolean) => {
     if (!currentStore) return;
     const { error } = await supabase.from('stores').update({ is_open: isOpen }).eq('id', currentStore.id);
@@ -177,6 +168,22 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDeleteProduct = async (productId: string) => {
+    if (!currentStore) return;
+    if (!confirm("Tem certeza que deseja excluir este produto? Esta ação não pode ser desfeita.")) return;
+
+    const { error } = await supabase.from('products').delete().eq('id', productId);
+    
+    if (!error) {
+      const updatedProducts = currentStore.products.filter(p => p.id !== productId);
+      const updatedStore = { ...currentStore, products: updatedProducts };
+      setCurrentStore(updatedStore);
+      setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
+    } else {
+      alert("Erro ao excluir produto: " + error.message);
+    }
+  };
+
   const subtotal = useMemo(() => cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0), [cart]);
 
   if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-background-light dark:bg-background-dark"><div className="size-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div></div>;
@@ -197,7 +204,13 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {view === 'SAAS_ADMIN' && <SaaSAdminDashboard stores={stores} saasPassword={saasPassword} onUpdateSaaSPassword={(p) => supabase.from('saas_config').upsert({key: 'master_password', value: p})} onDeleteStore={(id) => supabase.from('stores').delete().eq('id', id)} onUpdateStorePassword={handleUpdateStorePassword} onBack={() => setView('HOME')} onViewStore={(s) => { setCurrentStore(s); setView('MENU'); }} />}
+      {view === 'SAAS_ADMIN' && <SaaSAdminDashboard stores={stores} saasPassword={saasPassword} onUpdateSaaSPassword={(p) => supabase.from('saas_config').upsert({key: 'master_password', value: p})} onDeleteStore={(id) => supabase.from('stores').delete().eq('id', id)} onUpdateStorePassword={(id, p) => {
+        const { error } = supabase.from('stores').update({ admin_password: p }).eq('id', id);
+        if (!error) {
+           setStores(prev => prev.map(s => s.id === id ? {...s, adminPassword: p} : s));
+           if (currentStore?.id === id) setCurrentStore({...currentStore, adminPassword: p});
+        }
+      }} onBack={() => setView('HOME')} onViewStore={(s) => { setCurrentStore(s); setView('MENU'); }} />}
       {view === 'REGISTER' && <RegisterStore onRegister={handleRegisterStore} onCancel={() => setView('HOME')} />}
 
       {view === 'MENU' && currentStore && (
@@ -229,7 +242,11 @@ const App: React.FC = () => {
           onUpdateWhatsApp={(w) => handleUpdateStoreSettings({ whatsapp: w })} 
           onUpdateStoreSettings={(settings) => handleUpdateStoreSettings(settings)}
           onUpdateOrderStatus={(id, st) => supabase.from('orders').update({status: st}).eq('id', id)}
-          products={currentStore.products} onAddProduct={() => { setEditingProduct(null); setView('PRODUCT_FORM'); }} onEditProduct={(p) => { setEditingProduct(p); setView('PRODUCT_FORM'); }} onToggleAvailability={() => {}} onBack={() => { setView('MENU'); setIsAdminLoggedIn(false); }}
+          products={currentStore.products} 
+          onAddProduct={() => { setEditingProduct(null); setView('PRODUCT_FORM'); }} 
+          onEditProduct={(p) => { setEditingProduct(p); setView('PRODUCT_FORM'); }} 
+          onDeleteProduct={handleDeleteProduct}
+          onToggleAvailability={() => {}} onBack={() => { setView('MENU'); setIsAdminLoggedIn(false); }}
           onUpdatePassword={(p) => handleUpdateStoreSettings({ adminPassword: p })}
         />
       )}
@@ -247,7 +264,10 @@ const App: React.FC = () => {
           store_id: currentStore.id
         };
 
-        const isNew = !p.id || p.id === 'new' || p.id.length > 15;
+        // Correção da detecção de novo produto:
+        // Se o id for 'new' ou não for um UUID válido (com hífen), consideramos novo.
+        const isNew = !p.id || p.id === 'new' || !p.id.includes('-');
+        
         const { error } = isNew 
           ? await supabase.from('products').insert([dbData]) 
           : await supabase.from('products').update(dbData).eq('id', p.id);
