@@ -10,7 +10,7 @@ import ProductForm from './views/ProductForm';
 import HomeView from './views/HomeView';
 import RegisterStore from './views/RegisterStore';
 import SaaSAdminDashboard from './views/SaaSAdminDashboard';
-import { supabase, isSupabaseConfigured } from './services/supabaseClient';
+import { supabase, isSupabaseConfigured, getMissingConfigKeys } from './services/supabaseClient';
 
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>('HOME');
@@ -22,6 +22,7 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [configError, setConfigError] = useState(false);
   const [storeNotFound, setStoreNotFound] = useState(false);
+  const [missingKeys, setMissingKeys] = useState<string[]>([]);
   
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -38,6 +39,7 @@ const App: React.FC = () => {
   // 1. Inicialização e Roteamento via Slug
   useEffect(() => {
     if (!isSupabaseConfigured()) {
+      setMissingKeys(getMissingConfigKeys());
       setConfigError(true);
       setIsLoading(false);
       return;
@@ -240,10 +242,32 @@ const App: React.FC = () => {
   if (configError) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background-light dark:bg-background-dark p-6">
-        <div className="max-w-md w-full bg-white dark:bg-[#1e1e1e] p-10 rounded-[3rem] border-2 border-primary/20 text-center shadow-2xl space-y-8">
+        <div className="max-w-md w-full bg-white dark:bg-[#1e1e1e] p-10 rounded-[3rem] border-2 border-primary/20 text-center shadow-2xl space-y-6">
           <span className="material-symbols-outlined text-6xl text-primary">warning</span>
-          <h2 className="text-2xl font-black">Ambiente não configurado</h2>
-          <button onClick={() => window.location.reload()} className="w-full bg-primary text-white font-black py-4 rounded-2xl">Recarregar</button>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-black">Ambiente não configurado</h2>
+            <p className="text-xs text-gray-500 font-medium px-4">Não conseguimos encontrar as chaves necessárias no seu painel da Vercel.</p>
+          </div>
+          
+          <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-2xl text-left space-y-3">
+             <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Variáveis Faltando:</p>
+             <ul className="space-y-2">
+                {missingKeys.map(key => (
+                  <li key={key} className="flex items-center gap-2 text-xs font-bold text-red-500">
+                    <span className="material-symbols-outlined text-sm">close</span>
+                    {key}
+                  </li>
+                ))}
+             </ul>
+          </div>
+
+          <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
+            Certifique-se de adicionar as chaves acima em <b>Settings > Environment Variables</b> na Vercel e fazer um <b>Redeploy</b>.
+          </p>
+
+          <button onClick={() => window.location.reload()} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20">
+            Tentar Novamente
+          </button>
         </div>
       </div>
     );
