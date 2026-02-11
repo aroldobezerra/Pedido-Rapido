@@ -18,7 +18,7 @@ export interface Product {
   id: string;
   name: string;
   price: number;
-  category: Category;
+  category: string; // Mudado de Category enum para string para suportar customização
   description: string;
   image: string;
   extras: Extra[];
@@ -33,6 +33,7 @@ export interface Store {
   whatsapp: string;
   adminPassword: string;
   customDomain?: string;
+  categories?: string[]; // Lista customizada de categorias
   products: Product[];
   orders: Order[];
   createdAt: number;

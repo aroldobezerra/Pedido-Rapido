@@ -1,11 +1,12 @@
 
-import React, { useState, useMemo } from 'react';
-import { Product, Category } from '../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Product } from '../types';
 
 interface CustomerMenuProps {
   storeName: string;
   isOpen: boolean;
   products: Product[];
+  categories: string[];
   onAddToCart: (p: Product) => void;
   cartCount: number;
   subtotal: number;
@@ -18,6 +19,7 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
   storeName,
   isOpen,
   products, 
+  categories,
   onAddToCart, 
   cartCount, 
   subtotal, 
@@ -25,13 +27,19 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
   onViewAdmin,
   onBack
 }) => {
-  const [activeCategory, setActiveCategory] = useState<Category>(Category.BURGERS);
+  const [activeCategory, setActiveCategory] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
 
+  // Inicializa a categoria ativa com a primeira disponível
+  useEffect(() => {
+    if (categories.length > 0 && !activeCategory) {
+      setActiveCategory(categories[0]);
+    }
+  }, [categories, activeCategory]);
+
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
-      // Normalização para evitar erros de case-sensitive no banco
       const matchesCategory = String(p.category).toLowerCase() === String(activeCategory).toLowerCase();
       const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           p.description.toLowerCase().includes(searchQuery.toLowerCase());
@@ -81,7 +89,7 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
         )}
         
         <div className="flex overflow-x-auto hide-scrollbar px-4 pb-2 gap-6">
-          {Object.values(Category).map(cat => (
+          {categories.map(cat => (
             <button 
               key={cat}
               onClick={() => setActiveCategory(cat)}
@@ -105,13 +113,13 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
 
       <main className="px-4 space-y-8 mt-6 max-w-lg mx-auto w-full">
         <section className="space-y-4">
-          <h2 className="text-xl font-black tracking-tight px-1">{activeCategory}</h2>
+          <h2 className="text-xl font-black tracking-tight px-1">{activeCategory || 'Selecione uma categoria'}</h2>
           
           <div className="grid gap-6">
             {filteredProducts.length === 0 ? (
               <div className="py-20 flex flex-col items-center justify-center text-center opacity-40">
                  <span className="material-symbols-outlined text-6xl mb-4">info</span>
-                 <p className="font-bold text-sm">Nenhum produto disponível em {activeCategory} no momento.</p>
+                 <p className="font-bold text-sm">Nenhum produto disponível {activeCategory ? `em ${activeCategory}` : ''} no momento.</p>
               </div>
             ) : (
               filteredProducts.map(product => (

@@ -12,6 +12,8 @@ import RegisterStore from './views/RegisterStore';
 import SaaSAdminDashboard from './views/SaaSAdminDashboard';
 import { supabase, isSupabaseConfigured, getMissingConfigKeys } from './services/supabaseClient';
 
+const DEFAULT_CATEGORIES = Object.values(Category) as string[];
+
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>('HOME');
   const [stores, setStores] = useState<Store[]>([]);
@@ -43,7 +45,7 @@ const App: React.FC = () => {
     isAvailable: p.is_available ?? p.isAvailable ?? true,
     trackInventory: p.track_inventory ?? p.trackInventory ?? false,
     extras: p.extras || [],
-    category: p.category as Category
+    category: p.category
   });
 
   useEffect(() => {
@@ -68,6 +70,7 @@ const App: React.FC = () => {
           adminPassword: s.admin_password || s.adminPassword || "", 
           customDomain: s.custom_domain || "",
           isOpen: s.is_open ?? true,
+          categories: s.categories || DEFAULT_CATEGORIES,
           products: (s.products || []).map(mapProduct),
           orders: s.orders || []
         }));
@@ -108,6 +111,7 @@ const App: React.FC = () => {
         slug: newStore.slug,
         whatsapp: newStore.whatsapp,
         admin_password: newStore.adminPassword,
+        categories: DEFAULT_CATEGORIES,
         is_open: true
       }]).select().single();
       
@@ -125,7 +129,13 @@ const App: React.FC = () => {
 
       const { data: fullStore } = await supabase.from('stores').select('*, products(*), orders(*)').eq('id', storeData.id).single();
       if (fullStore) {
-        const mapped = { ...fullStore, adminPassword: fullStore.admin_password, isOpen: fullStore.is_open, products: fullStore.products.map(mapProduct) };
+        const mapped = { 
+          ...fullStore, 
+          adminPassword: fullStore.admin_password, 
+          isOpen: fullStore.is_open, 
+          categories: fullStore.categories || DEFAULT_CATEGORIES,
+          products: fullStore.products.map(mapProduct) 
+        };
         setStores(prev => [...prev, mapped]);
         setCurrentStore(mapped);
         setView('MENU');
@@ -151,6 +161,7 @@ const App: React.FC = () => {
     if (updates.whatsapp) dbUpdates.whatsapp = updates.whatsapp;
     if (updates.adminPassword) dbUpdates.admin_password = updates.adminPassword;
     if (updates.customDomain !== undefined) dbUpdates.custom_domain = updates.customDomain;
+    if (updates.categories) dbUpdates.categories = updates.categories;
 
     const { error } = await supabase.from('stores').update(dbUpdates).eq('id', currentStore.id);
     if (!error) {
@@ -158,10 +169,29 @@ const App: React.FC = () => {
         ...currentStore, 
         ...updates, 
         adminPassword: updates.adminPassword || currentStore.adminPassword,
-        customDomain: updates.customDomain !== undefined ? updates.customDomain : currentStore.customDomain
+        customDomain: updates.customDomain !== undefined ? updates.customDomain : currentStore.customDomain,
+        categories: updates.categories || currentStore.categories
       };
       setCurrentStore(updatedStore);
       setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
+      
+      // Se houve renomeação de categoria, precisamos atualizar os produtos vinculados
+      if (updates._categoryMapping) {
+        const { oldName, newName } = updates._categoryMapping;
+        const productsToUpdate = currentStore.products.filter(p => p.category === oldName);
+        if (productsToUpdate.length > 0) {
+          await Promise.all(productsToUpdate.map(p => 
+            supabase.from('products').update({ category: newName }).eq('id', p.id)
+          ));
+          // Refresh products
+          const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
+          if (refreshed) {
+             const mapped = refreshed.map(mapProduct);
+             setCurrentStore({ ...updatedStore, products: mapped });
+          }
+        }
+      }
+      
       alert("Ajustes salvos com sucesso!");
     } else {
       alert("Erro ao salvar: " + error.message);
@@ -216,6 +246,7 @@ const App: React.FC = () => {
       {view === 'MENU' && currentStore && (
         <CustomerMenu 
           storeName={currentStore.name} isOpen={currentStore.isOpen} products={currentStore.products} 
+          categories={currentStore.categories || DEFAULT_CATEGORIES}
           onAddToCart={(p) => { if(!currentStore.isOpen) return; setCart(prev => { const ex = prev.find(i => i.product.id === p.id); if(ex) return prev.map(i => i.product.id === p.id ? {...i, quantity: i.quantity + 1} : i); return [...prev, {product: p, quantity: 1, selectedExtras: []}]; }); }} 
           cartCount={cart.reduce((a, b) => a + b.quantity, 0)} subtotal={subtotal} onViewCart={() => setView('CART')} onViewAdmin={() => { setLoginError(''); setView('ADMIN_LOGIN'); }} onBack={() => { setCurrentStore(null); window.history.pushState({}, '', window.location.pathname); setView('HOME'); }}
         />
@@ -243,6 +274,7 @@ const App: React.FC = () => {
           onUpdateStoreSettings={(settings) => handleUpdateStoreSettings(settings)}
           onUpdateOrderStatus={(id, st) => supabase.from('orders').update({status: st}).eq('id', id)}
           products={currentStore.products} 
+          categories={currentStore.categories || DEFAULT_CATEGORIES}
           onAddProduct={() => { setEditingProduct(null); setView('PRODUCT_FORM'); }} 
           onEditProduct={(p) => { setEditingProduct(p); setView('PRODUCT_FORM'); }} 
           onDeleteProduct={handleDeleteProduct}
@@ -251,7 +283,7 @@ const App: React.FC = () => {
         />
       )}
 
-      {view === 'PRODUCT_FORM' && currentStore && <ProductForm product={editingProduct} onSave={async (p) => { 
+      {view === 'PRODUCT_FORM' && currentStore && <ProductForm categories={currentStore.categories || DEFAULT_CATEGORIES} product={editingProduct} onSave={async (p) => { 
         const dbData = {
           name: p.name,
           price: p.price,
@@ -264,8 +296,6 @@ const App: React.FC = () => {
           store_id: currentStore.id
         };
 
-        // Correção da detecção de novo produto:
-        // Se o id for 'new' ou não for um UUID válido (com hífen), consideramos novo.
         const isNew = !p.id || p.id === 'new' || !p.id.includes('-');
         
         const { error } = isNew 

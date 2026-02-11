@@ -13,6 +13,7 @@ interface AdminDashboardProps {
   onUpdateStoreSettings: (settings: any) => void;
   onUpdateOrderStatus: (id: string, status: OrderStatus) => void;
   products: Product[];
+  categories: string[];
   onAddProduct: () => void;
   onEditProduct: (p: Product) => void;
   onDeleteProduct: (id: string) => void;
@@ -23,7 +24,7 @@ interface AdminDashboardProps {
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
   slug, customDomain, whatsappNumber, isOpen, orders, onToggleStoreStatus, onUpdateWhatsApp, onUpdateStoreSettings, onUpdateOrderStatus,
-  products, onAddProduct, onEditProduct, onDeleteProduct, onToggleAvailability, onBack, onUpdatePassword
+  products, categories, onAddProduct, onEditProduct, onDeleteProduct, onToggleAvailability, onBack, onUpdatePassword
 }) => {
   const [activeTab, setActiveTab] = useState<'KITCHEN' | 'PRODUCTS' | 'STATS' | 'SETTINGS'>('KITCHEN');
   const [copied, setCopied] = useState(false);
@@ -31,6 +32,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newWA, setNewWA] = useState(whatsappNumber);
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
+
+  // Estados para gerenciamento de categorias
+  const [editingCategoryIdx, setEditingCategoryIdx] = useState<number | null>(null);
+  const [categoryNameInput, setCategoryNameInput] = useState('');
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
 
   const stats = useMemo(() => {
     const totalVendas = orders.reduce((acc, o) => o.status !== 'Cancelled' ? acc + o.total : acc, 0);
@@ -50,8 +56,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [orders]);
 
   const activeOrders = orders.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled');
-
-  // Link fixo conforme solicitado para divulgação direta
   const storeLink = `https://pedido-rapido.vercel.app/?s=${slug}`;
 
   const handleCopyLink = () => {
@@ -62,11 +66,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleSaveSettings = () => {
     const updates: any = {};
-    
-    if (newWA !== whatsappNumber) {
-      updates.whatsapp = newWA.replace(/\D/g, '');
-    }
-    
+    if (newWA !== whatsappNumber) updates.whatsapp = newWA.replace(/\D/g, '');
     if (newPass) {
       if (newPass === confirmPass) {
         updates.adminPassword = newPass;
@@ -77,12 +77,53 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return;
       }
     }
+    if (Object.keys(updates).length > 0) onUpdateStoreSettings(updates);
+    else alert("Nenhuma alteração detectada.");
+  };
 
-    if (Object.keys(updates).length > 0) {
-      onUpdateStoreSettings(updates);
-    } else {
-      alert("Nenhuma alteração detectada.");
+  const handleAddCategory = () => {
+    if (!categoryNameInput.trim()) return;
+    if (categories.includes(categoryNameInput.trim())) {
+      alert("Essa categoria já existe.");
+      return;
     }
+    const updated = [...categories, categoryNameInput.trim()];
+    onUpdateStoreSettings({ categories: updated });
+    setCategoryNameInput('');
+    setIsAddingCategory(false);
+  };
+
+  const handleEditCategory = (index: number) => {
+    const oldName = categories[index];
+    const newName = categoryNameInput.trim();
+    if (!newName || newName === oldName) {
+      setEditingCategoryIdx(null);
+      return;
+    }
+    const updated = [...categories];
+    updated[index] = newName;
+    
+    // Passamos um mapping especial para o App.tsx atualizar os produtos
+    onUpdateStoreSettings({ 
+      categories: updated,
+      _categoryMapping: { oldName, newName }
+    });
+    setEditingCategoryIdx(null);
+    setCategoryNameInput('');
+  };
+
+  const handleDeleteCategory = (index: number) => {
+    const catName = categories[index];
+    const hasProducts = products.some(p => p.category === catName);
+    
+    if (hasProducts) {
+      if (!confirm(`A categoria "${catName}" possui produtos vinculados. Se você excluí-la, os produtos ficarão sem categoria no cardápio. Deseja continuar?`)) return;
+    } else {
+      if (!confirm(`Deseja excluir a categoria "${catName}"?`)) return;
+    }
+
+    const updated = categories.filter((_, i) => i !== index);
+    onUpdateStoreSettings({ categories: updated });
   };
 
   const translateStatus = (status: string) => {
@@ -277,6 +318,64 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {activeTab === 'SETTINGS' && (
           <div className="space-y-6">
+             {/* Gerenciamento de Categorias */}
+             <div className="bg-white dark:bg-white/5 p-6 rounded-3xl border border-gray-100 dark:border-white/10 space-y-6">
+                <div className="flex justify-between items-center">
+                   <h3 className="text-xl font-black flex items-center gap-2">
+                      <span className="material-symbols-outlined text-primary">category</span>
+                      Categorias
+                   </h3>
+                   {!isAddingCategory && (
+                     <button 
+                        onClick={() => { setIsAddingCategory(true); setCategoryNameInput(''); }}
+                        className="text-[10px] font-black uppercase text-primary border border-primary/20 px-3 py-1 rounded-full hover:bg-primary/5"
+                     >
+                        + Nova
+                     </button>
+                   )}
+                </div>
+
+                {isAddingCategory && (
+                   <div className="bg-gray-50 dark:bg-black/20 p-4 rounded-2xl flex gap-2 animate-in slide-in-from-right duration-200">
+                      <input 
+                         value={categoryNameInput}
+                         onChange={(e) => setCategoryNameInput(e.target.value)}
+                         className="flex-1 bg-white dark:bg-white/5 border-none rounded-xl p-3 text-sm font-bold"
+                         placeholder="Nome da categoria..."
+                      />
+                      <button onClick={handleAddCategory} className="bg-primary text-white p-3 rounded-xl active:scale-95 transition-all"><span className="material-symbols-outlined">check</span></button>
+                      <button onClick={() => setIsAddingCategory(false)} className="bg-gray-200 dark:bg-white/10 p-3 rounded-xl active:scale-95 transition-all"><span className="material-symbols-outlined">close</span></button>
+                   </div>
+                )}
+
+                <div className="space-y-2">
+                   {categories.map((cat, idx) => (
+                      <div key={idx} className="flex items-center justify-between bg-gray-50 dark:bg-white/5 p-4 rounded-2xl group">
+                         {editingCategoryIdx === idx ? (
+                            <div className="flex-1 flex gap-2">
+                               <input 
+                                  value={categoryNameInput}
+                                  onChange={(e) => setCategoryNameInput(e.target.value)}
+                                  className="flex-1 bg-white dark:bg-white/5 border-none rounded-xl p-2 text-sm font-bold"
+                                  autoFocus
+                               />
+                               <button onClick={() => handleEditCategory(idx)} className="text-green-500 p-1"><span className="material-symbols-outlined">check</span></button>
+                               <button onClick={() => setEditingCategoryIdx(null)} className="text-gray-400 p-1"><span className="material-symbols-outlined">close</span></button>
+                            </div>
+                         ) : (
+                            <>
+                               <span className="font-bold text-sm">{cat}</span>
+                               <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button onClick={() => { setEditingCategoryIdx(idx); setCategoryNameInput(cat); }} className="text-primary p-2 hover:bg-white/10 rounded-lg transition-all"><span className="material-symbols-outlined text-sm">edit</span></button>
+                                  <button onClick={() => handleDeleteCategory(idx)} className="text-red-500 p-2 hover:bg-white/10 rounded-lg transition-all"><span className="material-symbols-outlined text-sm">delete</span></button>
+                               </div>
+                            </>
+                         )}
+                      </div>
+                   ))}
+                </div>
+             </div>
+
              <div className="bg-white dark:bg-white/5 p-6 rounded-3xl border border-gray-100 dark:border-white/10 space-y-6">
                 <h3 className="text-xl font-black flex items-center gap-2">
                    <span className="material-symbols-outlined text-primary">settings_applications</span>

@@ -1,20 +1,21 @@
 
 import React, { useState } from 'react';
-import { Product, Category, Extra } from '../types';
+import { Product, Extra } from '../types';
 import { generateProductImage, getSmartProductDescription } from '../services/geminiService';
 
 interface ProductFormProps {
+  categories: string[];
   product: Product | null;
   onSave: (p: Product) => void;
   onCancel: () => void;
 }
 
-const ProductForm: React.FC<ProductFormProps> = ({ product, onSave, onCancel }) => {
+const ProductForm: React.FC<ProductFormProps> = ({ categories, product, onSave, onCancel }) => {
   const [formData, setFormData] = useState<Product>(product || {
     id: 'new',
     name: '',
     price: 0,
-    category: Category.BURGERS,
+    category: categories[0] || '',
     description: '',
     image: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&q=80&w=800',
     extras: [],
@@ -29,6 +30,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ product, onSave, onCancel }) 
 
   const handleSave = async () => {
     if (!formData.name) { alert("Dê um nome ao produto."); return; }
+    if (!formData.category) { alert("Escolha uma categoria."); return; }
     setIsSaving(true);
     try {
       await onSave(formData);
@@ -130,10 +132,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ product, onSave, onCancel }) 
               <label className="text-[10px] font-black uppercase text-gray-400 px-1">Categoria</label>
               <select 
                 value={formData.category}
-                onChange={(e) => setFormData(prev => ({ ...prev, category: e.target.value as Category }))}
+                onChange={(e) => setFormData(prev => ({ ...prev, category: e.target.value }))}
                 className="w-full p-4 bg-white dark:bg-white/5 border-none rounded-2xl shadow-sm font-bold"
               >
-                {Object.values(Category).map(c => <option key={c} value={c}>{c}</option>)}
+                {categories.length === 0 ? <option value="">Sem Categorias</option> : categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
           </div>
