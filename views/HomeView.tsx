@@ -16,10 +16,10 @@ const HomeView: React.FC<HomeViewProps> = ({ onRegister, onSaaSAdmin }) => {
           </div>
           <span className="text-primary font-black uppercase tracking-[0.3em] text-[10px] mb-2">Plataforma SaaS Premium</span>
           <h1 className="text-5xl md:text-7xl font-black tracking-tighter leading-[0.9] text-gray-900 dark:text-white">
-            Transforme sua lanchonete em um <span className="text-primary">Império Digital.</span>
+            Transforme seu Negócio em um <span className="text-primary">Império Digital.</span>
           </h1>
           <p className="mt-6 text-lg text-gray-500 dark:text-gray-400 max-w-xl mx-auto font-medium">
-            Cardápios inteligentes com IA, pedidos via WhatsApp e gestão profissional. Tudo pronto em menos de 2 minutos.
+            Cardápios inteligentes com IA, pedidos via WhatsApp e gestão profissional para Lanchonetes, Pizzarias, Açaís e muito mais.
           </p>
         </div>
 
@@ -29,7 +29,7 @@ const HomeView: React.FC<HomeViewProps> = ({ onRegister, onSaaSAdmin }) => {
             className="w-full md:w-auto bg-primary text-white font-black px-10 py-5 rounded-2xl shadow-xl shadow-primary/20 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 text-lg"
           >
             <span className="material-symbols-outlined">add_business</span>
-            Criar Minha Lanchonete Grátis
+            Criar Meu Cardápio Digital Grátis
           </button>
           <a href="#beneficios" className="text-sm font-black uppercase tracking-widest text-gray-400 hover:text-primary transition-colors">
             Ver Benefícios
@@ -44,27 +44,27 @@ const HomeView: React.FC<HomeViewProps> = ({ onRegister, onSaaSAdmin }) => {
               <span className="material-symbols-outlined text-3xl">auto_awesome</span>
             </div>
             <h3 className="text-xl font-black">Fotos com IA</h3>
-            <p className="text-gray-500 text-sm leading-relaxed">Geramos imagens apetitosas para seus produtos usando inteligência artificial avançada.</p>
+            <p className="text-gray-500 text-sm leading-relaxed">Geramos imagens apetitosas para seus produtos usando inteligência artificial avançada, seja para um hambúrguer ou uma pizza gourmet.</p>
           </div>
           <div className="space-y-4">
             <div className="size-14 bg-green-500/10 text-green-500 rounded-2xl flex items-center justify-center">
               <span className="material-symbols-outlined text-3xl">chat</span>
             </div>
             <h3 className="text-xl font-black">Pedidos no WhatsApp</h3>
-            <p className="text-gray-500 text-sm leading-relaxed">Seus clientes escolhem no cardápio e o pedido chega formatado direto no seu WhatsApp.</p>
+            <p className="text-gray-500 text-sm leading-relaxed">Seus clientes escolhem no cardápio e o pedido chega formatado direto no seu WhatsApp, pronto para a produção.</p>
           </div>
           <div className="space-y-4">
             <div className="size-14 bg-purple-500/10 text-purple-500 rounded-2xl flex items-center justify-center">
               <span className="material-symbols-outlined text-3xl">dashboard_customize</span>
             </div>
             <h3 className="text-xl font-black">Painel de Gestão</h3>
-            <p className="text-gray-500 text-sm leading-relaxed">Gerencie produtos, horários, estoque e veja relatórios de vendas em tempo real.</p>
+            <p className="text-gray-500 text-sm leading-relaxed">Controle total de categorias, preços e estoque. Adapte o sistema para qualquer tipo de delivery ou atendimento local.</p>
           </div>
         </div>
       </section>
 
       <footer className="mt-auto py-10 px-6 flex flex-col items-center gap-4">
-        <p className="text-xs text-gray-400 font-medium">© 2024 Pedido Rápido AI - A tecnologia por trás do seu sucesso.</p>
+        <p className="text-xs text-gray-400 font-medium">© 2024 Pedido Rápido AI - A tecnologia por trás do seu sucesso digital.</p>
         <button 
           onClick={onSaaSAdmin}
           className="text-[10px] font-bold uppercase tracking-widest text-gray-300 hover:text-primary transition-colors flex items-center gap-2"
