@@ -140,8 +140,9 @@ const App: React.FC = () => {
               if (prev.orders.some(o => o.id === newOrder.id)) return prev;
               return { ...prev, orders: [newOrder, ...prev.orders] };
             });
+            // Som de notificação mais estável
             if (view === 'ADMIN' && isAdminLoggedIn) {
-               try { new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3').play(); } catch(e){}
+               try { new Audio('https://cdn.pixabay.com/audio/2022/03/15/audio_7302f37c42.mp3').play().catch(() => {}); } catch(e){}
             }
           } else if (payload.eventType === 'UPDATE') {
             const updatedOrder = mapOrder(payload.new);
@@ -165,12 +166,52 @@ const App: React.FC = () => {
     };
   }, [currentStore?.id, view, isAdminLoggedIn, currentOrder?.id]);
 
+  const handleUpdateOrderStatus = async (id: string, status: OrderStatus) => {
+    if (!currentStore) return;
+    
+    // 1. Atualiza no Banco
+    const { error } = await supabase.from('orders').update({ status }).eq('id', id);
+    
+    if (error) {
+      alert("Erro ao atualizar status: " + error.message);
+      return;
+    }
+
+    // 2. Atualiza no Estado Local Imediatamente (Fallback se Realtime falhar)
+    setCurrentStore(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        orders: prev.orders.map(o => o.id === id ? { ...o, status } : o)
+      };
+    });
+  };
+
+  const handleDeleteProduct = async (id: string) => {
+    if (!currentStore) return;
+    if (!confirm("Deseja excluir este produto permanentemente?")) return;
+
+    const { error } = await supabase.from('products').delete().eq('id', id);
+    if (error) {
+      alert("Erro ao excluir: " + error.message);
+      return;
+    }
+
+    // Atualiza localmente
+    setCurrentStore(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        products: prev.products.filter(p => p.id !== id)
+      };
+    });
+  };
+
   const handleConfirmOrder = async (message: string) => {
     if (!currentStore) return;
 
     const total = subtotal + (orderMetadata.deliveryMethod === 'Delivery' ? 5 : 0);
     
-    // Objeto limpo apenas com as colunas que existem no banco
     const dbOrderPayload = {
       store_id: currentStore.id,
       customer_name: orderMetadata.customerName,
@@ -193,12 +234,10 @@ const App: React.FC = () => {
 
       if (error) throw error;
 
-      // Abre WhatsApp
       const phone = currentStore.whatsapp.replace(/\D/g, '');
       const encodedMsg = encodeURIComponent(message);
       window.open(`https://wa.me/${phone}?text=${encodedMsg}`, '_blank');
 
-      // Atualiza estado com o mapeamento correto
       const finalOrder = mapOrder(data);
       setCurrentOrder(finalOrder);
       setCart([]);
@@ -353,12 +392,12 @@ const App: React.FC = () => {
           slug={currentStore.slug} whatsappNumber={currentStore.whatsapp} isOpen={currentStore.isOpen} orders={currentStore.orders || []} onToggleStoreStatus={() => handleUpdateStoreStatus(!currentStore.isOpen)} 
           onUpdateWhatsApp={(w) => handleUpdateStoreSettings({ whatsapp: w })} 
           onUpdateStoreSettings={(settings) => handleUpdateStoreSettings(settings)}
-          onUpdateOrderStatus={(id, st) => supabase.from('orders').update({status: st}).eq('id', id)}
+          onUpdateOrderStatus={handleUpdateOrderStatus}
           products={currentStore.products} 
           categories={derivedCategories}
           onAddProduct={() => { setEditingProduct(null); setView('PRODUCT_FORM'); }} 
           onEditProduct={(p) => { setEditingProduct(p); setView('PRODUCT_FORM'); }} 
-          onDeleteProduct={(id) => supabase.from('products').delete().eq('id', id)}
+          onDeleteProduct={handleDeleteProduct}
           onToggleAvailability={() => {}} onBack={() => { setView('MENU'); setIsAdminLoggedIn(false); }}
           onUpdatePassword={(p) => handleUpdateStoreSettings({ adminPassword: p })}
         />

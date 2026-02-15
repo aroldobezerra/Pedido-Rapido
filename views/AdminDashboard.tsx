@@ -11,7 +11,7 @@ interface AdminDashboardProps {
   onToggleStoreStatus: () => void;
   onUpdateWhatsApp: (w: string) => void;
   onUpdateStoreSettings: (settings: any) => void;
-  onUpdateOrderStatus: (id: string, status: OrderStatus) => void;
+  onUpdateOrderStatus: (id: string, status: OrderStatus) => Promise<void>;
   products: Product[];
   categories: string[];
   onAddProduct: () => void;
@@ -28,6 +28,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'KITCHEN' | 'PRODUCTS' | 'STATS' | 'SETTINGS'>('KITCHEN');
   const [copied, setCopied] = useState(false);
+  const [processingOrder, setProcessingOrder] = useState<string | null>(null);
   
   const [newWA, setNewWA] = useState(whatsappNumber);
   const [newPass, setNewPass] = useState('');
@@ -64,64 +65,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleSaveSettings = () => {
-    const updates: any = {};
-    if (newWA !== whatsappNumber) updates.whatsapp = newWA.replace(/\D/g, '');
-    if (newPass) {
-      if (newPass === confirmPass) {
-        updates.adminPassword = newPass;
-        setNewPass('');
-        setConfirmPass('');
-      } else {
-        alert("As senhas não coincidem.");
-        return;
-      }
-    }
-    if (Object.keys(updates).length > 0) onUpdateStoreSettings(updates);
-    else alert("Nenhuma alteração detectada.");
-  };
-
-  const handleAddCategory = () => {
-    const name = categoryNameInput.trim();
-    if (!name) return;
-    if (categories.includes(name)) {
-      alert("Essa categoria já existe.");
-      return;
-    }
-    // Dispara para o App.tsx salvar na lista de sessão
-    onUpdateStoreSettings({ _categoryAdd: name });
-    
-    setCategoryNameInput('');
-    setIsAddingCategory(false);
-    alert("Pronto! Categoria adicionada à lista. Agora você pode selecioná-la ao criar ou editar um produto.");
-  };
-
-  const handleRenameCategoryAction = (index: number) => {
-    const oldName = categories[index];
-    const newName = categoryNameInput.trim();
-    if (!newName || newName === oldName) {
-      setEditingCategoryIdx(null);
-      return;
-    }
-    
-    onUpdateStoreSettings({ 
-      _categoryMapping: { oldName, newName }
-    });
-
-    setEditingCategoryIdx(null);
-    setCategoryNameInput('');
-  };
-
-  const handleDeleteCategoryAction = (index: number) => {
-    const catName = categories[index];
-    const hasProducts = products.some(p => p.category === catName);
-    
-    if (hasProducts) {
-      if (!confirm(`Existem produtos na categoria "${catName}". Se excluir, esses produtos ficarão como "Sem Categoria". Continuar?`)) return;
-      onUpdateStoreSettings({ _categoryDelete: { catName } });
-    } else {
-      if (!confirm(`Deseja remover "${catName}" da lista?`)) return;
-      onUpdateStoreSettings({ _categoryDelete: { catName } });
+  const handleUpdateStatus = async (id: string, st: OrderStatus) => {
+    setProcessingOrder(id);
+    try {
+      await onUpdateOrderStatus(id, st);
+    } finally {
+      setProcessingOrder(null);
     }
   };
 
@@ -198,13 +147,31 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                       <div className="flex gap-2 pt-2">
                         {order.status === 'Received' && (
-                          <button onClick={() => onUpdateOrderStatus(order.id, 'Preparing')} className="flex-1 bg-blue-500 text-white text-xs font-black py-4 rounded-xl">Aceitar Pedido</button>
+                          <button 
+                            disabled={processingOrder === order.id}
+                            onClick={() => handleUpdateStatus(order.id, 'Preparing')} 
+                            className="flex-1 bg-blue-500 text-white text-xs font-black py-4 rounded-xl disabled:opacity-50"
+                          >
+                            {processingOrder === order.id ? 'Processando...' : 'Aceitar Pedido'}
+                          </button>
                         )}
                         {order.status === 'Preparing' && (
-                          <button onClick={() => onUpdateOrderStatus(order.id, 'Ready')} className="flex-1 bg-green-500 text-white text-xs font-black py-4 rounded-xl">Marcar como Pronto</button>
+                          <button 
+                            disabled={processingOrder === order.id}
+                            onClick={() => handleUpdateStatus(order.id, 'Ready')} 
+                            className="flex-1 bg-green-500 text-white text-xs font-black py-4 rounded-xl disabled:opacity-50"
+                          >
+                            {processingOrder === order.id ? 'Processando...' : 'Marcar como Pronto'}
+                          </button>
                         )}
                         {order.status === 'Ready' && (
-                          <button onClick={() => onUpdateOrderStatus(order.id, 'Delivered')} className="flex-1 bg-primary text-white text-xs font-black py-4 rounded-xl">Finalizar Entrega</button>
+                          <button 
+                            disabled={processingOrder === order.id}
+                            onClick={() => handleUpdateStatus(order.id, 'Delivered')} 
+                            className="flex-1 bg-primary text-white text-xs font-black py-4 rounded-xl disabled:opacity-50"
+                          >
+                            {processingOrder === order.id ? 'Processando...' : 'Finalizar Entrega'}
+                          </button>
                         )}
                       </div>
                    </div>
@@ -323,7 +290,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                          className="flex-1 bg-white dark:bg-white/5 border-none rounded-xl p-3 text-sm font-bold shadow-inner"
                          placeholder="Nome da categoria..."
                       />
-                      <button onClick={handleAddCategory} className="bg-primary text-white p-3 rounded-xl shadow-lg shadow-primary/20"><span className="material-symbols-outlined">check</span></button>
+                      <button onClick={() => {
+                        const name = categoryNameInput.trim();
+                        if (!name) return;
+                        onUpdateStoreSettings({ _categoryAdd: name });
+                        setCategoryNameInput('');
+                        setIsAddingCategory(false);
+                      }} className="bg-primary text-white p-3 rounded-xl shadow-lg shadow-primary/20"><span className="material-symbols-outlined">check</span></button>
                       <button onClick={() => setIsAddingCategory(false)} className="bg-gray-200 dark:bg-white/10 p-3 rounded-xl"><span className="material-symbols-outlined">close</span></button>
                    </div>
                 )}
@@ -339,7 +312,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   className="flex-1 bg-white dark:bg-white/5 border-none rounded-xl p-2 text-sm font-bold shadow-inner"
                                   autoFocus
                                />
-                               <button onClick={() => handleRenameCategoryAction(idx)} className="text-green-500 p-1"><span className="material-symbols-outlined">check</span></button>
+                               <button onClick={() => {
+                                  const oldName = categories[idx];
+                                  const newName = categoryNameInput.trim();
+                                  if (newName && newName !== oldName) {
+                                    onUpdateStoreSettings({ _categoryMapping: { oldName, newName } });
+                                  }
+                                  setEditingCategoryIdx(null);
+                               }} className="text-green-500 p-1"><span className="material-symbols-outlined">check</span></button>
                                <button onClick={() => setEditingCategoryIdx(null)} className="text-gray-400 p-1"><span className="material-symbols-outlined">close</span></button>
                             </div>
                          ) : (
@@ -350,7 +330,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                </div>
                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                   <button onClick={() => { setEditingCategoryIdx(idx); setCategoryNameInput(cat); }} className="text-primary p-2 hover:bg-white/10 rounded-lg"><span className="material-symbols-outlined text-sm">edit</span></button>
-                                  <button onClick={() => handleDeleteCategoryAction(idx)} className="text-red-500 p-2 hover:bg-white/10 rounded-lg"><span className="material-symbols-outlined text-sm">delete</span></button>
+                                  <button onClick={() => {
+                                     if(confirm(`Deseja remover "${cat}" da lista?`)) onUpdateStoreSettings({ _categoryDelete: { catName: cat } });
+                                  }} className="text-red-500 p-2 hover:bg-white/10 rounded-lg"><span className="material-symbols-outlined text-sm">delete</span></button>
                                </div>
                             </>
                          )}
@@ -375,7 +357,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <input type="password" value={confirmPass} onChange={(e) => setConfirmPass(e.target.value)} className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4 shadow-inner" placeholder="Confirme a nova senha" />
                    </div>
                 </div>
-                <button onClick={handleSaveSettings} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all">Salvar Tudo</button>
+                <button onClick={() => {
+                  const updates: any = {};
+                  if (newWA !== whatsappNumber) updates.whatsapp = newWA.replace(/\D/g, '');
+                  if (newPass && newPass === confirmPass) updates.adminPassword = newPass;
+                  onUpdateStoreSettings(updates);
+                }} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all">Salvar Tudo</button>
              </div>
           </div>
         )}
