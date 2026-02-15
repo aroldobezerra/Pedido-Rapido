@@ -40,6 +40,10 @@ const App: React.FC = () => {
     pickupTime: ''
   });
 
+  const formatTimestamp = (dateStr: string) => {
+    return new Date(dateStr).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  };
+
   const mapProduct = (p: any): Product => ({
     ...p,
     id: String(p.id),
@@ -47,6 +51,16 @@ const App: React.FC = () => {
     trackInventory: p.track_inventory ?? p.trackInventory ?? false,
     extras: p.extras || [],
     category: p.category
+  });
+
+  const mapOrder = (o: any): Order => ({
+    ...o,
+    id: String(o.id),
+    timestamp: o.created_at ? formatTimestamp(o.created_at) : '00:00',
+    customerName: o.customer_name,
+    deliveryMethod: o.delivery_method,
+    tableNumber: o.table_number,
+    pickupTime: o.pickup_time
   });
 
   // Carregamento inicial do App
@@ -73,7 +87,7 @@ const App: React.FC = () => {
           customDomain: s.custom_domain || "",
           isOpen: s.is_open ?? true,
           products: (s.products || []).map(mapProduct),
-          orders: (s.orders || []).sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+          orders: (s.orders || []).map(mapOrder).sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
         }));
         
         setStores(allStores);
@@ -113,25 +127,24 @@ const App: React.FC = () => {
       .on(
         'postgres_changes',
         {
-          event: '*', // INSERT, UPDATE, DELETE
+          event: '*', 
           schema: 'public',
           table: 'orders',
           filter: `store_id=eq.${currentStore.id}`
         },
         (payload) => {
           if (payload.eventType === 'INSERT') {
-            const newOrder = payload.new as Order;
+            const newOrder = mapOrder(payload.new);
             setCurrentStore(prev => {
               if (!prev) return null;
               if (prev.orders.some(o => o.id === newOrder.id)) return prev;
               return { ...prev, orders: [newOrder, ...prev.orders] };
             });
-            // Toca um som de notificação se for na cozinha
             if (view === 'ADMIN' && isAdminLoggedIn) {
                try { new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3').play(); } catch(e){}
             }
           } else if (payload.eventType === 'UPDATE') {
-            const updatedOrder = payload.new as Order;
+            const updatedOrder = mapOrder(payload.new);
             setCurrentStore(prev => {
               if (!prev) return null;
               return {
@@ -139,7 +152,6 @@ const App: React.FC = () => {
                 orders: prev.orders.map(o => o.id === updatedOrder.id ? updatedOrder : o)
               };
             });
-            // Se o pedido atual for o que mudou, atualiza para o cliente ver no tracking
             if (currentOrder && currentOrder.id === updatedOrder.id) {
               setCurrentOrder(updatedOrder);
             }
@@ -158,24 +170,24 @@ const App: React.FC = () => {
 
     const total = subtotal + (orderMetadata.deliveryMethod === 'Delivery' ? 5 : 0);
     
-    const dbOrder = {
+    // Objeto limpo apenas com as colunas que existem no banco
+    const dbOrderPayload = {
       store_id: currentStore.id,
       customer_name: orderMetadata.customerName,
       delivery_method: orderMetadata.deliveryMethod,
       address: orderMetadata.address || null,
-      table_number: orderMetadata.tableNumber || null,
+      table_number: orderMetadata.table_number || orderMetadata.tableNumber || null,
       pickup_time: orderMetadata.pickupTime || null,
       notes: orderMetadata.notes || null,
       items: cart,
       total: total,
-      status: 'Received',
-      timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      status: 'Received'
     };
 
     try {
       const { data, error } = await supabase
         .from('orders')
-        .insert([dbOrder])
+        .insert([dbOrderPayload])
         .select()
         .single();
 
@@ -186,13 +198,14 @@ const App: React.FC = () => {
       const encodedMsg = encodeURIComponent(message);
       window.open(`https://wa.me/${phone}?text=${encodedMsg}`, '_blank');
 
-      // Atualiza estado
-      setCurrentOrder(data as Order);
+      // Atualiza estado com o mapeamento correto
+      const finalOrder = mapOrder(data);
+      setCurrentOrder(finalOrder);
       setCart([]);
       setView('TRACK');
     } catch (err: any) {
       console.error("Erro ao salvar pedido:", err);
-      alert("Não conseguimos enviar seu pedido para a cozinha no momento: " + (err.message || "Erro desconhecido"));
+      alert("Não conseguimos enviar seu pedido para a cozinha: " + (err.message || "Erro desconhecido"));
     }
   };
 
@@ -204,7 +217,7 @@ const App: React.FC = () => {
       setCurrentStore(updatedStore);
       setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     } else {
-      alert("Erro ao atualizar status da loja: " + error.message);
+      alert("Erro ao atualizar status: " + error.message);
     }
   };
 
@@ -219,10 +232,7 @@ const App: React.FC = () => {
         .eq('store_id', currentStore.id)
         .eq('category', oldName);
       
-      if (batchError) {
-        alert("Erro ao renomear produtos: " + batchError.message);
-        return;
-      }
+      if (batchError) { alert("Erro ao renomear produtos: " + batchError.message); return; }
       setSessionCategories(prev => prev.map(c => c === oldName ? newName : c));
       const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
       if (refreshed) {
@@ -231,29 +241,17 @@ const App: React.FC = () => {
         setCurrentStore(updatedStore);
         setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
       }
-      alert(`Categoria "${oldName}" alterada para "${newName}" com sucesso!`);
       return;
     }
 
     if (updates._categoryDelete) {
       const { catName } = updates._categoryDelete;
-      const { error: batchError } = await supabase
-        .from('products')
-        .update({ category: 'Sem Categoria' })
-        .eq('store_id', currentStore.id)
-        .eq('category', catName);
-      
-      if (batchError) {
-        alert("Erro ao limpar categoria: " + batchError.message);
-        return;
-      }
+      await supabase.from('products').update({ category: 'Sem Categoria' }).eq('store_id', currentStore.id).eq('category', catName);
       setSessionCategories(prev => prev.filter(c => c !== catName));
       const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
       if (refreshed) {
         const mapped = refreshed.map(mapProduct);
-        const updatedStore = { ...currentStore, products: mapped };
-        setCurrentStore(updatedStore);
-        setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
+        setCurrentStore({ ...currentStore, products: mapped });
       }
       return;
     }
@@ -269,18 +267,13 @@ const App: React.FC = () => {
     
     const { error } = await supabase.from('stores').update(dbUpdates).eq('id', currentStore.id);
     if (!error) {
-      const updatedStore = { 
-        ...currentStore, 
-        ...updates, 
-        adminPassword: updates.adminPassword || currentStore.adminPassword
-      };
+      const updatedStore = { ...currentStore, ...updates };
       setCurrentStore(updatedStore);
       setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
-      alert("Ajustes salvos com sucesso!");
-    } else {
-      alert("Erro ao salvar: " + error.message);
     }
   };
+
+  const subtotal = useMemo(() => cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0), [cart]);
 
   const derivedCategories = useMemo(() => {
     if (!currentStore) return DEFAULT_CATEGORIES;
@@ -288,20 +281,6 @@ const App: React.FC = () => {
     const combined = Array.from(new Set([...fromProducts, ...sessionCategories]));
     return combined.length > 0 ? combined : DEFAULT_CATEGORIES;
   }, [currentStore?.products, sessionCategories]);
-
-  const handleDeleteProduct = async (productId: string) => {
-    if (!currentStore) return;
-    if (!confirm("Tem certeza que deseja excluir este produto?")) return;
-    const { error } = await supabase.from('products').delete().eq('id', productId);
-    if (!error) {
-      const updatedProducts = currentStore.products.filter(p => p.id !== productId);
-      const updatedStore = { ...currentStore, products: updatedProducts };
-      setCurrentStore(updatedStore);
-      setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
-    }
-  };
-
-  const subtotal = useMemo(() => cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0), [cart]);
 
   if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-background-light dark:bg-background-dark"><div className="size-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div></div>;
 
@@ -324,6 +303,7 @@ const App: React.FC = () => {
            setStores(prev => prev.map(s => s.id === id ? {...s, adminPassword: p} : s));
         });
       }} onBack={() => setView('HOME')} onViewStore={(s) => { setCurrentStore(s); setView('MENU'); }} />}
+      
       {view === 'REGISTER' && <RegisterStore onRegister={() => setView('MENU')} onCancel={() => setView('HOME')} />}
 
       {view === 'MENU' && currentStore && (
@@ -378,7 +358,7 @@ const App: React.FC = () => {
           categories={derivedCategories}
           onAddProduct={() => { setEditingProduct(null); setView('PRODUCT_FORM'); }} 
           onEditProduct={(p) => { setEditingProduct(p); setView('PRODUCT_FORM'); }} 
-          onDeleteProduct={handleDeleteProduct}
+          onDeleteProduct={(id) => supabase.from('products').delete().eq('id', id)}
           onToggleAvailability={() => {}} onBack={() => { setView('MENU'); setIsAdminLoggedIn(false); }}
           onUpdatePassword={(p) => handleUpdateStoreSettings({ adminPassword: p })}
         />
@@ -389,13 +369,10 @@ const App: React.FC = () => {
         const isNew = !p.id || p.id === 'new' || !p.id.includes('-');
         const { error } = isNew ? await supabase.from('products').insert([dbData]) : await supabase.from('products').update(dbData).eq('id', p.id);
         if(!error) { 
-          setSessionCategories(prev => prev.filter(c => c !== p.category));
           const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
           if (refreshed) {
             const mapped = refreshed.map(mapProduct);
-            const updatedStore = { ...currentStore, products: mapped };
-            setCurrentStore(updatedStore);
-            setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
+            setCurrentStore({ ...currentStore, products: mapped });
           }
           setView('ADMIN'); 
         } else { alert("Erro ao salvar: " + error.message); }
