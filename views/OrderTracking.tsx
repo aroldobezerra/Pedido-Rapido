@@ -19,6 +19,7 @@ const OrderTracking: React.FC<OrderTrackingProps> = ({ order, onBack }) => {
   };
 
   const currentStep = getStatusStep(order.status);
+  const displayId = String(order.id).slice(-6);
 
   return (
     <div className="bg-background-light dark:bg-background-dark min-h-screen">
@@ -26,12 +27,12 @@ const OrderTracking: React.FC<OrderTrackingProps> = ({ order, onBack }) => {
         <button onClick={onBack} className="text-primary cursor-pointer flex size-10 items-center justify-center">
           <span className="material-symbols-outlined">arrow_back_ios</span>
         </button>
-        <h2 className="text-lg font-bold flex-1 text-center pr-10">Acompanhar Pedido</h2>
+        <h2 className="text-lg font-bold flex-1 text-center pr-10">Status do Pedido</h2>
       </header>
 
       <main className="max-w-md mx-auto pb-24">
         <div className="px-6 py-8">
-          <p className="text-gray-400 text-[10px] font-black uppercase tracking-[0.2em] mb-2">Pedido #{order.id.slice(-6)}</p>
+          <p className="text-gray-400 text-[10px] font-black uppercase tracking-[0.2em] mb-2">Pedido #{displayId}</p>
           <h1 className="text-3xl font-black leading-tight">
             {order.status === 'Received' && 'Aguardando confirmação...'}
             {order.status === 'Preparing' && 'Sua comida está sendo preparada!'}
@@ -91,11 +92,18 @@ const OrderTracking: React.FC<OrderTrackingProps> = ({ order, onBack }) => {
           </div>
         </div>
 
-        <div className="px-6 mt-12">
+        <div className="px-6 mt-12 flex flex-col gap-4">
           <div className="bg-primary/5 border border-primary/10 p-6 rounded-[2rem] text-center">
              <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-1">Previsão</p>
              <p className="text-4xl font-black text-primary">20-30 min</p>
           </div>
+          
+          <button 
+            onClick={onBack}
+            className="w-full bg-white dark:bg-white/5 border border-gray-100 dark:border-white/10 py-5 rounded-2xl font-black text-sm uppercase tracking-widest text-[#9c7349] hover:bg-gray-50 active:scale-95 transition-all"
+          >
+            Voltar ao Cardápio
+          </button>
         </div>
       </main>
     </div>

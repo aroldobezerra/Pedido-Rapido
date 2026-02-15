@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Product, CartItem, Order, AppView, Category, Store, OrderStatus } from './types';
 import CustomerMenu from './views/CustomerMenu';
 import CartView from './views/CartView';
@@ -27,9 +27,7 @@ const App: React.FC = () => {
   const [storeNotFound, setStoreNotFound] = useState(false);
   const [missingKeys, setMissingKeys] = useState<string[]>([]);
   
-  // Categorias criadas na sessão que ainda não possuem produtos
   const [sessionCategories, setSessionCategories] = useState<string[]>([]);
-
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
@@ -51,6 +49,7 @@ const App: React.FC = () => {
     category: p.category
   });
 
+  // Carregamento inicial do App
   useEffect(() => {
     if (!isSupabaseConfigured()) {
       setMissingKeys(getMissingConfigKeys());
@@ -74,7 +73,7 @@ const App: React.FC = () => {
           customDomain: s.custom_domain || "",
           isOpen: s.is_open ?? true,
           products: (s.products || []).map(mapProduct),
-          orders: s.orders || []
+          orders: (s.orders || []).sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
         }));
         
         setStores(allStores);
@@ -105,6 +104,98 @@ const App: React.FC = () => {
     initApp();
   }, []);
 
+  // Escuta de pedidos em tempo real (Realtime)
+  useEffect(() => {
+    if (!currentStore) return;
+
+    const channel = supabase
+      .channel(`orders-store-${currentStore.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'orders',
+          filter: `store_id=eq.${currentStore.id}`
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newOrder = payload.new as Order;
+            setCurrentStore(prev => {
+              if (!prev) return null;
+              if (prev.orders.some(o => o.id === newOrder.id)) return prev;
+              return { ...prev, orders: [newOrder, ...prev.orders] };
+            });
+            // Toca um som de notificação se for na cozinha
+            if (view === 'ADMIN' && isAdminLoggedIn) {
+               try { new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3').play(); } catch(e){}
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedOrder = payload.new as Order;
+            setCurrentStore(prev => {
+              if (!prev) return null;
+              return {
+                ...prev,
+                orders: prev.orders.map(o => o.id === updatedOrder.id ? updatedOrder : o)
+              };
+            });
+            // Se o pedido atual for o que mudou, atualiza para o cliente ver no tracking
+            if (currentOrder && currentOrder.id === updatedOrder.id) {
+              setCurrentOrder(updatedOrder);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentStore?.id, view, isAdminLoggedIn, currentOrder?.id]);
+
+  const handleConfirmOrder = async (message: string) => {
+    if (!currentStore) return;
+
+    const total = subtotal + (orderMetadata.deliveryMethod === 'Delivery' ? 5 : 0);
+    
+    const dbOrder = {
+      store_id: currentStore.id,
+      customer_name: orderMetadata.customerName,
+      delivery_method: orderMetadata.deliveryMethod,
+      address: orderMetadata.address || null,
+      table_number: orderMetadata.tableNumber || null,
+      pickup_time: orderMetadata.pickupTime || null,
+      notes: orderMetadata.notes || null,
+      items: cart,
+      total: total,
+      status: 'Received',
+      timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .insert([dbOrder])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Abre WhatsApp
+      const phone = currentStore.whatsapp.replace(/\D/g, '');
+      const encodedMsg = encodeURIComponent(message);
+      window.open(`https://wa.me/${phone}?text=${encodedMsg}`, '_blank');
+
+      // Atualiza estado
+      setCurrentOrder(data as Order);
+      setCart([]);
+      setView('TRACK');
+    } catch (err: any) {
+      console.error("Erro ao salvar pedido:", err);
+      alert("Não conseguimos enviar seu pedido para a cozinha no momento: " + (err.message || "Erro desconhecido"));
+    }
+  };
+
   const handleUpdateStoreStatus = async (isOpen: boolean) => {
     if (!currentStore) return;
     const { error } = await supabase.from('stores').update({ is_open: isOpen }).eq('id', currentStore.id);
@@ -120,7 +211,6 @@ const App: React.FC = () => {
   const handleUpdateStoreSettings = async (updates: any) => {
     if (!currentStore) return;
     
-    // RENOMEAR CATEGORIA EM LOTE (Nos produtos)
     if (updates._categoryMapping) {
       const { oldName, newName } = updates._categoryMapping;
       const { error: batchError } = await supabase
@@ -133,11 +223,7 @@ const App: React.FC = () => {
         alert("Erro ao renomear produtos: " + batchError.message);
         return;
       }
-
-      // Atualiza também as categorias da sessão se o nome antigo estiver lá
       setSessionCategories(prev => prev.map(c => c === oldName ? newName : c));
-
-      // Recarrega produtos
       const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
       if (refreshed) {
         const mapped = refreshed.map(mapProduct);
@@ -149,7 +235,6 @@ const App: React.FC = () => {
       return;
     }
 
-    // EXCLUIR CATEGORIA (Limpar nos produtos)
     if (updates._categoryDelete) {
       const { catName } = updates._categoryDelete;
       const { error: batchError } = await supabase
@@ -162,10 +247,7 @@ const App: React.FC = () => {
         alert("Erro ao limpar categoria: " + batchError.message);
         return;
       }
-
-      // Remove da sessão também
       setSessionCategories(prev => prev.filter(c => c !== catName));
-
       const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
       if (refreshed) {
         const mapped = refreshed.map(mapProduct);
@@ -176,7 +258,6 @@ const App: React.FC = () => {
       return;
     }
 
-    // ADICIONAR NOVA CATEGORIA À SESSÃO
     if (updates._categoryAdd) {
       setSessionCategories(prev => Array.from(new Set([...prev, updates._categoryAdd])));
       return;
@@ -204,7 +285,6 @@ const App: React.FC = () => {
   const derivedCategories = useMemo(() => {
     if (!currentStore) return DEFAULT_CATEGORIES;
     const fromProducts = Array.from(new Set(currentStore.products.map(p => p.category).filter(Boolean)));
-    // Combina categorias de produtos, sessão e padrão
     const combined = Array.from(new Set([...fromProducts, ...sessionCategories]));
     return combined.length > 0 ? combined : DEFAULT_CATEGORIES;
   }, [currentStore?.products, sessionCategories]);
@@ -256,7 +336,25 @@ const App: React.FC = () => {
       )}
 
       {view === 'CART' && <CartView items={cart} updateQuantity={(id, d) => setCart(prev => prev.map(i => i.product.id === id ? {...i, quantity: Math.max(0, i.quantity + d)} : i).filter(i => i.quantity > 0))} clearCart={() => setCart([])} onBack={() => setView('MENU')} onProceed={(m) => { setOrderMetadata(m); setView('REVIEW'); }} subtotal={subtotal} />}
-      {view === 'REVIEW' && <OrderReview items={cart} customerName={orderMetadata.customerName || ''} address={orderMetadata.address || ''} method={orderMetadata.deliveryMethod || 'Delivery'} onBack={() => setView('CART')} onConfirm={() => setView('TRACK')} subtotal={subtotal} />}
+      
+      {view === 'REVIEW' && currentStore && (
+        <OrderReview 
+          items={cart} 
+          customerName={orderMetadata.customerName || ''} 
+          address={orderMetadata.address || ''} 
+          method={orderMetadata.deliveryMethod || 'Delivery'} 
+          tableNumber={orderMetadata.tableNumber}
+          pickupTime={orderMetadata.pickupTime}
+          orderNotes={orderMetadata.notes}
+          onBack={() => setView('CART')} 
+          onConfirm={handleConfirmOrder} 
+          subtotal={subtotal} 
+        />
+      )}
+
+      {view === 'TRACK' && currentOrder && (
+        <OrderTracking order={currentOrder} onBack={() => { setCurrentOrder(null); setView('MENU'); }} />
+      )}
       
       {view === 'ADMIN_LOGIN' && currentStore && (
         <div className="min-h-screen flex items-center justify-center p-6">
@@ -291,9 +389,7 @@ const App: React.FC = () => {
         const isNew = !p.id || p.id === 'new' || !p.id.includes('-');
         const { error } = isNew ? await supabase.from('products').insert([dbData]) : await supabase.from('products').update(dbData).eq('id', p.id);
         if(!error) { 
-          // Limpa a categoria da sessão se ela agora foi salva em um produto
           setSessionCategories(prev => prev.filter(c => c !== p.category));
-
           const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
           if (refreshed) {
             const mapped = refreshed.map(mapProduct);
