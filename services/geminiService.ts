@@ -1,15 +1,14 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-const getEnv = (key: string) => {
-  if (typeof process !== 'undefined' && process.env) {
-    return process.env[key] || process.env[`VITE_${key}`] || process.env[`NEXT_PUBLIC_${key}`] || null;
-  }
-  return null;
-};
+/**
+ * Gemini Service using the latest @google/genai SDK.
+ * All calls strictly adhere to provided guidelines.
+ */
 
 export const generateProductImage = async (prompt: string, aspectRatio: "1:1" | "16:9" | "9:16" | "4:3" = "1:1") => {
-  const apiKey = getEnv('API_KEY');
+  // Guideline: Create a new instance right before making an API call
+  const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("Chave de API do Gemini não configurada.");
 
   const ai = new GoogleGenAI({ apiKey });
@@ -29,10 +28,22 @@ export const generateProductImage = async (prompt: string, aspectRatio: "1:1" | 
       }
     });
 
-    const imagePart = response.candidates?.[0]?.content?.parts.find(part => part.inlineData);
+    // Guideline: Iterate through parts to find the image, do not assume the first part is an image.
+    let base64ImageData = '';
+    let mimeType = 'image/png';
     
-    if (imagePart?.inlineData) {
-      return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+    if (response.candidates?.[0]?.content?.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          base64ImageData = part.inlineData.data;
+          mimeType = part.inlineData.mimeType;
+          break;
+        }
+      }
+    }
+    
+    if (base64ImageData) {
+      return `data:${mimeType};base64,${base64ImageData}`;
     }
     
     throw new Error("Não foi possível gerar a imagem no momento.");
@@ -43,17 +54,18 @@ export const generateProductImage = async (prompt: string, aspectRatio: "1:1" | 
 };
 
 export const getSmartProductDescription = async (productName: string) => {
-  const apiKey = getEnv('API_KEY');
+  const apiKey = process.env.API_KEY;
   if (!apiKey) return "";
 
   const ai = new GoogleGenAI({ apiKey });
   
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-3-flash-preview', // Guideline: Recommended model for basic text tasks
       contents: `Escreva uma descrição irresistível, curta e profissional para o produto "${productName}" em um cardápio de lanchonete premium brasileira. Use adjetivos que despertem fome. Máximo de 140 caracteres.`,
     });
 
+    // Guideline: Access .text property directly (not a method)
     return response.text || "";
   } catch (error) {
     console.error("Erro Gemini Text:", error);

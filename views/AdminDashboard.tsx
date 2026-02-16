@@ -23,30 +23,31 @@ interface AdminDashboardProps {
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
-  slug, whatsappNumber, isOpen, orders, onToggleStoreStatus, onUpdateStoreSettings, onUpdateOrderStatus,
-  products, categories, onAddProduct, onEditProduct, onDeleteProduct, onBack
+  slug, whatsappNumber, isOpen, orders = [], onToggleStoreStatus, onUpdateStoreSettings, onUpdateOrderStatus,
+  products = [], categories = [], onAddProduct, onEditProduct, onDeleteProduct, onBack
 }) => {
   const [activeTab, setActiveTab] = useState<'KITCHEN' | 'PRODUCTS' | 'STATS' | 'SETTINGS'>('KITCHEN');
   const [copied, setCopied] = useState(false);
   const [processingOrder, setProcessingOrder] = useState<string | null>(null);
   
   const [newWA, setNewWA] = useState(whatsappNumber);
-  const [newPass, setNewPass] = useState('');
-  const [confirmPass, setConfirmPass] = useState('');
 
-  // Estados locais para edição
+  // Estados locais para edição de categorias
   const [editingCategoryIdx, setEditingCategoryIdx] = useState<number | null>(null);
   const [categoryNameInput, setCategoryNameInput] = useState('');
   const [isAddingCategory, setIsAddingCategory] = useState(false);
 
   const stats = useMemo(() => {
-    const totalVendas = orders.reduce((acc, o) => o.status !== 'Cancelled' ? acc + o.total : acc, 0);
+    if (!orders) return { totalVendas: 0, totalPedidos: 0, ticketMedio: 0, bestSellers: [] };
+    const totalVendas = orders.reduce((acc, o) => o.status !== 'Cancelled' ? acc + (o.total || 0) : acc, 0);
     const totalPedidos = orders.length;
     const ticketMedio = totalPedidos > 0 ? totalVendas / totalPedidos : 0;
     
     const productCounts: Record<string, number> = {};
-    orders.forEach(o => o.items.forEach(i => {
-      productCounts[i.product.name] = (productCounts[i.product.name] || 0) + i.quantity;
+    orders.forEach(o => o.items?.forEach(i => {
+      if (i.product?.name) {
+        productCounts[i.product.name] = (productCounts[i.product.name] || 0) + i.quantity;
+      }
     }));
     
     const bestSellers = Object.entries(productCounts)
@@ -56,7 +57,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return { totalVendas, totalPedidos, ticketMedio, bestSellers };
   }, [orders]);
 
-  const activeOrders = orders.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled');
+  const activeOrders = useMemo(() => 
+    orders.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled')
+  , [orders]);
+
   const storeLink = `https://pedido-rapido.vercel.app/?s=${slug}`;
 
   const handleCopyLink = () => {
@@ -66,9 +70,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleUpdateStatus = async (id: string, st: OrderStatus) => {
+    if (processingOrder) return;
     setProcessingOrder(id);
     try {
       await onUpdateOrderStatus(id, st);
+    } catch (e) {
+      console.error(e);
     } finally {
       setProcessingOrder(null);
     }
@@ -90,7 +97,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       <header className="sticky top-0 z-30 bg-white dark:bg-background-dark border-b border-gray-100 dark:border-white/10 px-4 py-4 flex items-center justify-between">
         <button onClick={onBack} className="p-2 flex items-center gap-1 text-primary">
           <span className="material-symbols-outlined">arrow_back</span>
-          <span className="text-xs font-bold uppercase">Sair</span>
+          <span className="text-xs font-bold uppercase tracking-widest">Sair</span>
         </button>
         <h2 className="text-sm font-black uppercase tracking-widest">Painel de Gestão</h2>
         <div className="size-8"></div>
@@ -115,6 +122,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <h3 className="text-xl font-black">Pedidos em Tempo Real</h3>
                 <span className="text-[10px] font-black uppercase text-primary bg-primary/10 px-2 py-1 rounded-full">{activeOrders.length} ativos</span>
              </div>
+             
              {activeOrders.length === 0 ? (
                <div className="flex flex-col items-center justify-center py-20 opacity-30 text-center">
                   <span className="material-symbols-outlined text-6xl mb-2">restaurant_menu</span>
@@ -123,15 +131,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
              ) : (
                <div className="space-y-4">
                  {activeOrders.map(order => (
-                   <div key={order.id} className="bg-white dark:bg-white/5 p-5 rounded-3xl border border-gray-100 dark:border-white/10 shadow-sm space-y-4">
+                   <div key={order.id} className="bg-white dark:bg-white/5 p-5 rounded-3xl border border-gray-100 dark:border-white/10 shadow-sm space-y-4 animate-in fade-in zoom-in-95 duration-300">
                       <div className="flex justify-between items-start">
                          <div className="flex-1 pr-4">
-                            <p className="text-[10px] font-black uppercase text-gray-400">#{order.id.slice(-6)} • {order.timestamp}</p>
-                            <h4 className="font-black text-lg">{order.customerName}</h4>
+                            <p className="text-[10px] font-black uppercase text-gray-400">#{order.id?.slice(-6)} • {order.timestamp}</p>
+                            <h4 className="font-black text-lg leading-tight">{order.customerName}</h4>
                             
-                            {/* EXIBIÇÃO DO ENDEREÇO EM DESTAQUE */}
                             {order.address && (
-                              <div className="bg-gray-50 dark:bg-black/20 p-2.5 rounded-xl border border-gray-100 dark:border-white/5 mt-1">
+                              <div className="bg-gray-50 dark:bg-black/20 p-2.5 rounded-xl border border-gray-100 dark:border-white/5 mt-1.5">
                                 <p className="text-[11px] font-bold text-[#9c7349] leading-tight flex items-start gap-1">
                                   <span className="material-symbols-outlined text-sm">location_on</span>
                                   {order.address}
@@ -139,7 +146,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </div>
                             )}
 
-                            <p className="text-[10px] text-primary font-black uppercase tracking-widest mt-2">{order.deliveryMethod === 'Delivery' ? 'Para Entrega' : order.deliveryMethod === 'Pickup' ? 'Para Retirada' : `Mesa ${order.tableNumber}`}</p>
+                            <p className="text-[10px] text-primary font-black uppercase tracking-widest mt-2">
+                              {order.deliveryMethod === 'Delivery' ? '🛵 Para Entrega' : order.deliveryMethod === 'Pickup' ? '🥡 Para Retirada' : `🪑 Mesa ${order.tableNumber}`}
+                            </p>
                          </div>
                          <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase shrink-0 ${
                            order.status === 'Received' ? 'bg-yellow-500/10 text-yellow-600' :
@@ -148,51 +157,62 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                            {translateStatus(order.status)}
                          </div>
                       </div>
+
+                      {/* ITENS DO PEDIDO */}
                       <div className="space-y-2 border-t border-gray-100 dark:border-white/5 pt-3">
-                         {order.items.map((item, idx) => (
-                           <div key={idx} className="flex justify-between items-center text-sm">
-                             <span className="font-bold text-gray-700 dark:text-gray-200">{item.quantity}x {item.product.name}</span>
-                             {item.notes && <span className="text-[10px] italic text-red-500 font-bold">Obs: {item.notes}</span>}
+                         {order.items?.map((item, idx) => (
+                           <div key={idx} className="flex justify-between items-start text-sm">
+                             <span className="font-bold text-gray-700 dark:text-gray-200">{item.quantity}x {item.product?.name}</span>
+                             {item.notes && <span className="text-[10px] italic text-red-500 font-bold ml-2">Obs: {item.notes}</span>}
                            </div>
                          ))}
                       </div>
 
-                      {/* FLUXO SEQUENCIAL DE BOTÕES */}
+                      {/* OBSERVAÇÕES GERAIS (DA TELA DO CARRINHO) */}
+                      {order.notes && (
+                        <div className="bg-yellow-50 dark:bg-yellow-500/5 p-3 rounded-xl border border-yellow-100 dark:border-yellow-500/10">
+                           <p className="text-[10px] font-black uppercase text-yellow-600 mb-1">Observações do Cliente:</p>
+                           <p className="text-xs font-medium italic text-gray-600 dark:text-gray-300">"{order.notes}"</p>
+                        </div>
+                      )}
+
+                      {/* BOTÃO SEQUENCIAL COM FEEDBACK */}
                       <div className="flex gap-2 pt-2">
                         {order.status === 'Received' && (
                           <button 
                             disabled={processingOrder === order.id}
                             onClick={() => handleUpdateStatus(order.id, 'Preparing')} 
-                            className="flex-1 bg-blue-600 text-white text-xs font-black py-4 rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                            className="flex-1 bg-blue-600 text-white text-xs font-black py-4 rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                           >
-                            <span className="material-symbols-outlined text-sm">check_circle</span>
-                            {processingOrder === order.id ? 'Aguarde...' : 'Aceitar Pedido'}
+                            <span className="material-symbols-outlined text-sm">{processingOrder === order.id ? 'sync' : 'check_circle'}</span>
+                            {processingOrder === order.id ? 'Processando...' : 'Aceitar Pedido'}
                           </button>
                         )}
                         {order.status === 'Preparing' && (
                           <button 
                             disabled={processingOrder === order.id}
                             onClick={() => handleUpdateStatus(order.id, 'Ready')} 
-                            className="flex-1 bg-orange-500 text-white text-xs font-black py-4 rounded-xl shadow-lg shadow-orange-500/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                            className="flex-1 bg-orange-500 text-white text-xs font-black py-4 rounded-xl shadow-lg shadow-orange-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                           >
-                            <span className="material-symbols-outlined text-sm">restaurant</span>
-                            {processingOrder === order.id ? 'Aguarde...' : 'Pedido em Produção (Pronto)'}
+                            <span className="material-symbols-outlined text-sm">{processingOrder === order.id ? 'sync' : 'restaurant'}</span>
+                            {processingOrder === order.id ? 'Processando...' : 'Finalizar Produção'}
                           </button>
                         )}
                         {order.status === 'Ready' && (
                           <button 
                             disabled={processingOrder === order.id}
                             onClick={() => handleUpdateStatus(order.id, 'Delivered')} 
-                            className="flex-1 bg-green-600 text-white text-xs font-black py-4 rounded-xl shadow-lg shadow-green-500/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                            className="flex-1 bg-green-600 text-white text-xs font-black py-4 rounded-xl shadow-lg shadow-green-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                           >
-                            <span className="material-symbols-outlined text-sm">delivery_dining</span>
-                            {processingOrder === order.id ? 'Aguarde...' : 'Enviar para Entrega'}
+                            <span className="material-symbols-outlined text-sm">{processingOrder === order.id ? 'sync' : 'delivery_dining'}</span>
+                            {processingOrder === order.id ? 'Processando...' : 'Enviar para Entrega'}
                           </button>
                         )}
                         
                         <button 
+                          disabled={processingOrder === order.id}
                           onClick={() => { if(confirm("Deseja CANCELAR este pedido?")) handleUpdateStatus(order.id, 'Cancelled'); }}
-                          className="px-4 bg-gray-100 dark:bg-white/5 text-gray-400 rounded-xl flex items-center justify-center"
+                          className="px-4 bg-gray-100 dark:bg-white/5 text-gray-400 rounded-xl flex items-center justify-center active:scale-95 disabled:opacity-30"
                         >
                           <span className="material-symbols-outlined text-sm">close</span>
                         </button>
@@ -209,14 +229,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="bg-white dark:bg-white/5 p-6 rounded-3xl border border-primary/20 shadow-sm space-y-4">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary">qr_code_2</span>
-                <h4 className="text-xs font-black uppercase text-primary tracking-widest">Seu Link de Vendas</h4>
+                <h4 className="text-xs font-black uppercase text-primary tracking-widest">Link de Vendas</h4>
               </div>
               <div className="bg-gray-50 dark:bg-black/20 p-4 rounded-2xl text-[12px] font-mono break-all border border-gray-100 dark:border-white/5 text-gray-500">
                 {storeLink}
               </div>
               <button onClick={handleCopyLink} className={`w-full py-4 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2 active:scale-95 ${copied ? 'bg-green-500 text-white' : 'bg-primary text-white shadow-xl shadow-primary/20'}`}>
                 <span className="material-symbols-outlined text-sm">{copied ? 'check' : 'content_copy'}</span>
-                {copied ? 'Link Copiado!' : 'Copiar Link para o WhatsApp'}
+                {copied ? 'Link Copiado!' : 'Copiar Link p/ WhatsApp'}
               </button>
             </div>
 
@@ -224,7 +244,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                <div className="flex items-center justify-between">
                   <div>
                     <p className="text-xl font-black">{isOpen ? 'Loja Aberta' : 'Loja Fechada'}</p>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase">Visibilidade no Site</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Status da Visibilidade</p>
                   </div>
                   <button onClick={onToggleStoreStatus} className={`w-14 h-8 rounded-full border-4 transition-colors ${isOpen ? 'bg-green-500 border-transparent' : 'bg-red-500 border-transparent'}`}>
                     <div className={`size-6 bg-white rounded-full transition-transform ${isOpen ? 'translate-x-6' : 'translate-x-0'}`}></div>
@@ -232,18 +252,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                </div>
             </div>
 
-            <button onClick={onAddProduct} className="w-full bg-primary text-white font-black py-5 rounded-2xl shadow-xl shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all">
-              <span className="material-symbols-outlined">add_circle</span> NOVO ITEM NO CARDÁPIO
+            <button onClick={onAddProduct} className="w-full bg-primary text-white font-black py-5 rounded-2xl shadow-xl shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all uppercase tracking-widest text-sm">
+              <span className="material-symbols-outlined">add_circle</span> Novo Item
             </button>
 
             <div className="space-y-3">
-              <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest px-1">Itens Atuais</h4>
+              <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest px-1">Seu Cardápio</h4>
               {products.map(p => (
                 <div key={p.id} className="bg-white dark:bg-white/5 p-3 rounded-2xl border border-gray-100 dark:border-white/10 flex items-center gap-4 group">
                   <div className="size-14 bg-cover bg-center rounded-xl shrink-0" style={{ backgroundImage: `url('${p.image}')` }}></div>
                   <div className="flex-1 min-w-0">
                     <p className="font-bold text-sm truncate">{p.name}</p>
-                    <p className="text-primary font-bold text-xs">R$ {p.price.toFixed(2)}</p>
+                    <p className="text-primary font-bold text-xs">R$ {p.price?.toFixed(2)}</p>
                   </div>
                   <div className="flex gap-1.5">
                     <button onClick={() => onEditProduct(p)} className="p-3 bg-gray-100 dark:bg-white/10 rounded-xl text-primary active:scale-90 transition-all"><span className="material-symbols-outlined text-sm">edit</span></button>
@@ -262,7 +282,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                <div className="bg-white dark:bg-white/5 p-6 rounded-3xl border border-gray-100 dark:border-white/10 flex justify-between items-center">
                   <div>
                     <p className="text-[10px] font-black uppercase text-gray-400 mb-1">Total Vendido</p>
-                    <p className="text-3xl font-black text-green-500">R$ {stats.totalVendas.toFixed(2)}</p>
+                    <p className="text-3xl font-black text-green-500">R$ {stats.totalVendas?.toFixed(2)}</p>
                   </div>
                   <span className="material-symbols-outlined text-4xl text-green-500/20">payments</span>
                </div>
@@ -273,7 +293,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                  </div>
                  <div className="bg-white dark:bg-white/5 p-5 rounded-3xl border border-gray-100 dark:border-white/10 text-center">
                     <p className="text-[10px] font-black uppercase text-gray-400 mb-1">Ticket Médio</p>
-                    <p className="text-xl font-black text-primary">R$ {stats.ticketMedio.toFixed(2)}</p>
+                    <p className="text-xl font-black text-primary">R$ {stats.ticketMedio?.toFixed(2)}</p>
                  </div>
                </div>
             </div>
@@ -286,23 +306,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="flex justify-between items-center">
                    <h3 className="text-xl font-black flex items-center gap-2">
                       <span className="material-symbols-outlined text-primary">category</span>
-                      Categorias do Cardápio
+                      Categorias
                    </h3>
                    {!isAddingCategory && (
                      <button 
                         onClick={() => { setIsAddingCategory(true); setCategoryNameInput(''); }}
                         className="text-[10px] font-black uppercase text-primary border border-primary/20 px-3 py-1 rounded-full hover:bg-primary/5"
                      >
-                        + Criar Nova
+                        + Novo
                      </button>
                    )}
-                </div>
-
-                <div className="bg-blue-50 dark:bg-primary/5 p-4 rounded-2xl border border-blue-100 dark:border-primary/10">
-                   <p className="text-[11px] text-blue-600 dark:text-primary font-bold uppercase leading-tight flex items-center gap-2">
-                     <span className="material-symbols-outlined text-sm">info</span>
-                     Nota: As categorias são detectadas pelos produtos. Você pode criar nomes novos ou renomear em massa abaixo.
-                   </p>
                 </div>
 
                 {isAddingCategory && (
@@ -349,7 +362,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <>
                                <div className="flex flex-col">
                                  <span className="font-bold text-sm">{cat}</span>
-                                 <span className="text-[9px] text-gray-400 font-black uppercase tracking-wider">{products.filter(p => p.category === cat).length} Produtos Vinculados</span>
+                                 <span className="text-[9px] text-gray-400 font-black uppercase tracking-wider">{products.filter(p => p.category === cat).length} Produtos</span>
                                </div>
                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                   <button onClick={() => { setEditingCategoryIdx(idx); setCategoryNameInput(cat); }} className="text-primary p-2 hover:bg-white/10 rounded-lg"><span className="material-symbols-outlined text-sm">edit</span></button>
@@ -367,25 +380,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
              <div className="bg-white dark:bg-white/5 p-6 rounded-3xl border border-gray-100 dark:border-white/10 space-y-6">
                 <h3 className="text-xl font-black flex items-center gap-2">
                    <span className="material-symbols-outlined text-primary">settings_applications</span>
-                   Ajustes de Acesso
+                   Ajustes Gerais
                 </h3>
                 <div className="space-y-4">
                    <div className="flex flex-col gap-2">
-                      <label className="text-[10px] font-black uppercase text-gray-400 px-1">WhatsApp de Vendas</label>
+                      <label className="text-[10px] font-black uppercase text-gray-400 px-1">WhatsApp de Recebimento</label>
                       <input type="tel" value={newWA} onChange={(e) => setNewWA(e.target.value)} className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4 font-bold text-primary shadow-inner" />
-                   </div>
-                   <div className="space-y-4">
-                      <p className="text-[10px] font-black uppercase text-primary tracking-widest px-1">Segurança</p>
-                      <input type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4 shadow-inner" placeholder="Nova senha da cozinha" />
-                      <input type="password" value={confirmPass} onChange={(e) => setConfirmPass(e.target.value)} className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4 shadow-inner" placeholder="Confirme a nova senha" />
                    </div>
                 </div>
                 <button onClick={() => {
                   const updates: any = {};
                   if (newWA !== whatsappNumber) updates.whatsapp = newWA.replace(/\D/g, '');
-                  if (newPass && newPass === confirmPass) updates.adminPassword = newPass;
                   onUpdateStoreSettings(updates);
-                }} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all">Salvar Tudo</button>
+                }} className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all">Salvar Alterações</button>
              </div>
           </div>
         )}
