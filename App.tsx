@@ -64,7 +64,8 @@ const App: React.FC = () => {
     customerName: o.customer_name || o.customerName,
     deliveryMethod: o.delivery_method || o.deliveryMethod,
     tableNumber: o.table_number || o.tableNumber,
-    pickupTime: o.pickup_time || o.pickupTime
+    pickupTime: o.pickup_time || o.pickupTime,
+    address: o.address
   });
 
   // Carregamento inicial do App
@@ -123,11 +124,10 @@ const App: React.FC = () => {
 
   // Escuta de pedidos em tempo real (Realtime)
   useEffect(() => {
-    if (!currentStore) return;
+    if (!currentStore || !isAdminLoggedIn || view !== 'ADMIN') return;
 
-    // Garante que estamos ouvindo apenas inserções e atualizações desta loja
     const channel = supabase
-      .channel(`orders-store-${currentStore.id}`)
+      .channel(`realtime-orders-${currentStore.id}`)
       .on(
         'postgres_changes',
         {
@@ -144,14 +144,10 @@ const App: React.FC = () => {
               if (prev.orders.some(o => o.id === newOrder.id)) return prev;
               return { ...prev, orders: [newOrder, ...prev.orders] };
             });
-            // Áudio estável (Sistema)
-            if (view === 'ADMIN' && isAdminLoggedIn) {
-               try { 
-                 const audio = new Audio('https://fonts.gstatic.com/s/i/productlogos/googleg/v6/24px.svg'); // Fallback silencioso se falhar
-                 // Usando um beep padrão de sistema caso o link externo falhe
-                 new Audio('https://notificationsounds.com/storage/sounds/file-sounds-1150-pristine.mp3').play().catch(() => {});
-               } catch(e){}
-            }
+            // Áudio estável (Notificação)
+            try { 
+              new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3').play().catch(() => {});
+            } catch(e){}
           } else if (payload.eventType === 'UPDATE') {
             const updatedOrder = mapOrder(payload.new);
             setCurrentStore(prev => {
@@ -161,9 +157,6 @@ const App: React.FC = () => {
                 orders: prev.orders.map(o => o.id === updatedOrder.id ? updatedOrder : o)
               };
             });
-            if (currentOrder && currentOrder.id === updatedOrder.id) {
-              setCurrentOrder(updatedOrder);
-            }
           }
         }
       )
@@ -172,12 +165,12 @@ const App: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentStore?.id, view, isAdminLoggedIn, currentOrder?.id]);
+  }, [currentStore?.id, view, isAdminLoggedIn]);
 
   const handleUpdateOrderStatus = async (id: string, status: OrderStatus) => {
     if (!currentStore) return;
     
-    // ATUALIZAÇÃO OTIMISTA: Muda na tela antes de ir pro banco
+    // Atualização otimista local
     setCurrentStore(prev => {
       if (!prev) return null;
       return {
@@ -190,8 +183,7 @@ const App: React.FC = () => {
       const { error } = await supabase.from('orders').update({ status }).eq('id', id);
       if (error) throw error;
     } catch (err: any) {
-      alert("Falha ao salvar status no servidor, mas a tela foi atualizada: " + err.message);
-      // Opcionalmente reverter o estado aqui se o erro for crítico
+      console.error("Erro ao atualizar status:", err);
     }
   };
 
@@ -242,7 +234,6 @@ const App: React.FC = () => {
     if (!error) {
       const updatedStore = { ...currentStore, isOpen };
       setCurrentStore(updatedStore);
-      setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     }
   };
 

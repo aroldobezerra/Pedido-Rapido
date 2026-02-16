@@ -77,8 +77,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const translateStatus = (status: string) => {
     switch (status) {
       case 'Received': return 'Recebido';
-      case 'Preparing': return 'Na Cozinha';
-      case 'Ready': return 'Pronto';
+      case 'Preparing': return 'Em Produção';
+      case 'Ready': return 'Pronto / Finalizado';
       case 'Delivered': return 'Entregue';
       case 'Cancelled': return 'Cancelado';
       default: return status;
@@ -125,12 +125,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                  {activeOrders.map(order => (
                    <div key={order.id} className="bg-white dark:bg-white/5 p-5 rounded-3xl border border-gray-100 dark:border-white/10 shadow-sm space-y-4">
                       <div className="flex justify-between items-start">
-                         <div>
+                         <div className="flex-1 pr-4">
                             <p className="text-[10px] font-black uppercase text-gray-400">#{order.id.slice(-6)} • {order.timestamp}</p>
                             <h4 className="font-black text-lg">{order.customerName}</h4>
-                            <p className="text-xs text-primary font-bold">{order.deliveryMethod === 'Delivery' ? 'Para Entrega' : order.deliveryMethod === 'Pickup' ? 'Para Retirada' : `Mesa ${order.tableNumber}`}</p>
+                            
+                            {/* EXIBIÇÃO DO ENDEREÇO EM DESTAQUE */}
+                            {order.address && (
+                              <div className="bg-gray-50 dark:bg-black/20 p-2.5 rounded-xl border border-gray-100 dark:border-white/5 mt-1">
+                                <p className="text-[11px] font-bold text-[#9c7349] leading-tight flex items-start gap-1">
+                                  <span className="material-symbols-outlined text-sm">location_on</span>
+                                  {order.address}
+                                </p>
+                              </div>
+                            )}
+
+                            <p className="text-[10px] text-primary font-black uppercase tracking-widest mt-2">{order.deliveryMethod === 'Delivery' ? 'Para Entrega' : order.deliveryMethod === 'Pickup' ? 'Para Retirada' : `Mesa ${order.tableNumber}`}</p>
                          </div>
-                         <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${
+                         <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase shrink-0 ${
                            order.status === 'Received' ? 'bg-yellow-500/10 text-yellow-600' :
                            order.status === 'Preparing' ? 'bg-blue-500/10 text-blue-600' : 'bg-green-500/10 text-green-600'
                          }`}>
@@ -145,34 +156,46 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                            </div>
                          ))}
                       </div>
+
+                      {/* FLUXO SEQUENCIAL DE BOTÕES */}
                       <div className="flex gap-2 pt-2">
                         {order.status === 'Received' && (
                           <button 
                             disabled={processingOrder === order.id}
                             onClick={() => handleUpdateStatus(order.id, 'Preparing')} 
-                            className="flex-1 bg-blue-500 text-white text-xs font-black py-4 rounded-xl disabled:opacity-50"
+                            className="flex-1 bg-blue-600 text-white text-xs font-black py-4 rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-2"
                           >
-                            {processingOrder === order.id ? 'Processando...' : 'Aceitar Pedido'}
+                            <span className="material-symbols-outlined text-sm">check_circle</span>
+                            {processingOrder === order.id ? 'Aguarde...' : 'Aceitar Pedido'}
                           </button>
                         )}
                         {order.status === 'Preparing' && (
                           <button 
                             disabled={processingOrder === order.id}
                             onClick={() => handleUpdateStatus(order.id, 'Ready')} 
-                            className="flex-1 bg-green-500 text-white text-xs font-black py-4 rounded-xl disabled:opacity-50"
+                            className="flex-1 bg-orange-500 text-white text-xs font-black py-4 rounded-xl shadow-lg shadow-orange-500/20 active:scale-95 transition-all flex items-center justify-center gap-2"
                           >
-                            {processingOrder === order.id ? 'Processando...' : 'Marcar como Pronto'}
+                            <span className="material-symbols-outlined text-sm">restaurant</span>
+                            {processingOrder === order.id ? 'Aguarde...' : 'Pedido em Produção (Pronto)'}
                           </button>
                         )}
                         {order.status === 'Ready' && (
                           <button 
                             disabled={processingOrder === order.id}
                             onClick={() => handleUpdateStatus(order.id, 'Delivered')} 
-                            className="flex-1 bg-primary text-white text-xs font-black py-4 rounded-xl disabled:opacity-50"
+                            className="flex-1 bg-green-600 text-white text-xs font-black py-4 rounded-xl shadow-lg shadow-green-500/20 active:scale-95 transition-all flex items-center justify-center gap-2"
                           >
-                            {processingOrder === order.id ? 'Processando...' : 'Finalizar Entrega'}
+                            <span className="material-symbols-outlined text-sm">delivery_dining</span>
+                            {processingOrder === order.id ? 'Aguarde...' : 'Enviar para Entrega'}
                           </button>
                         )}
+                        
+                        <button 
+                          onClick={() => { if(confirm("Deseja CANCELAR este pedido?")) handleUpdateStatus(order.id, 'Cancelled'); }}
+                          className="px-4 bg-gray-100 dark:bg-white/5 text-gray-400 rounded-xl flex items-center justify-center"
+                        >
+                          <span className="material-symbols-outlined text-sm">close</span>
+                        </button>
                       </div>
                    </div>
                  ))}
