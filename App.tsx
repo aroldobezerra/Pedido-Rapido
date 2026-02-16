@@ -20,6 +20,7 @@ const App: React.FC = () => {
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
   
   const [saasPassword, setSaasPassword] = useState(() => {
     return localStorage.getItem('saas_master_pass') || 'admin123';
@@ -210,6 +211,15 @@ const App: React.FC = () => {
     setCurrentStore(updatedStore);
   };
 
+  const handleAdminLogin = () => {
+    if (adminPasswordInput === currentStore?.adminPassword) {
+      setAdminPasswordInput('');
+      setView('ADMIN');
+    } else {
+      alert("Senha incorreta");
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark">
@@ -245,20 +255,43 @@ const App: React.FC = () => {
         );
       case 'ADMIN_LOGIN':
         return (
-          <div className="flex flex-col items-center justify-center h-screen p-8 bg-background-light dark:bg-background-dark">
-            <h2 className="text-2xl font-black mb-6">Login Administrativo</h2>
-            <input 
-              type="password" 
-              placeholder="Senha da Loja" 
-              className="w-full max-w-xs p-4 rounded-2xl border mb-4 bg-white dark:bg-white/10"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  if (e.currentTarget.value === currentStore?.adminPassword) setView('ADMIN');
-                  else alert("Senha incorreta");
-                }
-              }}
-            />
-            <button onClick={() => setView('MENU')} className="text-gray-400 font-bold uppercase text-xs">Voltar</button>
+          <div className="flex flex-col items-center justify-center h-screen p-8 bg-background-light dark:bg-background-dark animate-in fade-in duration-500">
+            <div className="w-full max-w-sm flex flex-col items-center space-y-8">
+              <div className="text-center">
+                <div className="size-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4 text-primary">
+                  <span className="material-symbols-outlined text-3xl">lock</span>
+                </div>
+                <h2 className="text-2xl font-black tracking-tight">Login Administrativo</h2>
+                <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">Acesso Restrito à Gerência</p>
+              </div>
+
+              <div className="w-full space-y-4">
+                <input 
+                  type="password" 
+                  value={adminPasswordInput}
+                  onChange={(e) => setAdminPasswordInput(e.target.value)}
+                  placeholder="Senha da Loja" 
+                  className="w-full p-5 rounded-2xl border-2 border-gray-100 dark:border-white/5 bg-white dark:bg-white/5 focus:border-primary/50 outline-none transition-all text-center font-bold tracking-[0.5em]"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAdminLogin();
+                  }}
+                  autoFocus
+                />
+                <button 
+                  onClick={handleAdminLogin}
+                  className="w-full bg-primary text-white font-black py-5 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all uppercase tracking-widest text-sm"
+                >
+                  Entrar no Painel
+                </button>
+              </div>
+
+              <button 
+                onClick={() => setView('MENU')} 
+                className="text-gray-400 font-black uppercase text-[10px] tracking-widest hover:text-primary transition-colors"
+              >
+                Voltar ao Cardápio
+              </button>
+            </div>
           </div>
         );
       case 'MENU':
