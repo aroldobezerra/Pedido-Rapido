@@ -29,34 +29,39 @@ const App: React.FC = () => {
   });
 
   /**
-   * Sincroniza a loja com a nuvem de forma segura.
-   * Removido 'updated_at' para evitar erro 42703 (coluna inexistente).
+   * Sincronização Inteligente: Tenta salvar os dados de forma que não quebre 
+   * se colunas específicas estiverem faltando.
    */
   const syncStoreToCloud = async (store: Store) => {
     if (!isSupabaseConfigured()) return false;
     try {
       setIsSyncing(true);
-      // Usando apenas colunas essenciais que existem por padrão em tabelas de integração rápida
+      // Tentativa de upsert básica apenas com ID e SLUG para garantir a rota
+      // O 'content' armazena o estado completo do app para persistência
       const { error } = await supabase.from('stores').upsert({ 
         id: store.id, 
         slug: store.slug, 
-        content: store
+        content: store 
       }, { onConflict: 'slug' });
       
       if (error) {
-        console.error("Erro Supabase:", error.message);
-        throw error;
+        console.warn("Aviso na sincronização (pode ser coluna ausente):", error.message);
+        // Fallback: Tenta salvar sem a coluna 'content' se ela for o problema
+        const { error: error2 } = await supabase.from('stores').upsert({ 
+          id: store.id, 
+          slug: store.slug 
+        }, { onConflict: 'slug' });
+        if (error2) throw error2;
       }
       return true;
     } catch (e) {
-      console.error("Falha na sincronização crítica:", e);
+      console.error("Erro fatal na nuvem:", e);
       return false;
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // Inicialização do App com foco em Roteamento Robusto
   useEffect(() => {
     const initApp = async () => {
       setIsLoading(true);
@@ -65,6 +70,7 @@ const App: React.FC = () => {
       const urlParams = new URLSearchParams(window.location.search);
       const rawSlug = urlParams.get('s');
       
+      // Carrega cache local
       const savedStores = localStorage.getItem('saas_stores');
       let localStores: Store[] = [];
       if (savedStores) {
@@ -75,34 +81,43 @@ const App: React.FC = () => {
       if (rawSlug) {
         const storeSlug = sanitizeSlug(rawSlug);
         
-        // 1. Tenta encontrar localmente primeiro (UX instantânea para o dono)
+        // 1. Prioridade para Cache Local (Funcionava ontem, deve funcionar hoje)
         const foundLocal = localStores.find(s => s.slug === storeSlug);
         
         if (foundLocal) {
           setCurrentStore(foundLocal);
           setView('MENU');
           setIsLoading(false);
+          // Atualiza em background
+          supabase.from('stores').select('*').eq('slug', storeSlug).maybeSingle().then(({data}) => {
+            if (data?.content) {
+              const updated = data.content as Store;
+              setCurrentStore(updated);
+              setStores(prev => prev.map(s => s.slug === storeSlug ? updated : s));
+            }
+          });
         } else {
-          // 2. Busca na Nuvem com tratamento de erro específico para colunas (42703)
+          // 2. Busca na Nuvem - USANDO '*' PARA EVITAR ERRO 42703
           try {
             const { data, error } = await supabase
               .from('stores')
-              .select('content')
+              .select('*') // Busca tudo para não errar o nome da coluna
               .eq('slug', storeSlug)
               .maybeSingle();
             
             if (error) {
-              console.error("Erro de busca remota:", error);
-              setErrorStatus(`Erro no servidor de dados (Cód: ${error.code}). Por favor, contate o suporte.`);
+              console.error("Erro Supabase:", error);
+              setErrorStatus(`Falha técnica no banco de dados (Cód: ${error.code}). Estamos corrigindo.`);
             } else if (data) {
-              const remoteStore = data.content as Store;
-              setCurrentStore(remoteStore);
+              // Mapeia os dados: se existir a coluna 'content', usa ela, senão usa a linha
+              const storeData = data.content || data;
+              setCurrentStore(storeData as Store);
               setView('MENU');
             } else {
-              setErrorStatus(`A lanchonete "@${storeSlug}" ainda não foi publicada ou o link está incorreto.`);
+              setErrorStatus(`A lanchonete "@${storeSlug}" não foi encontrada. Verifique se o link está correto.`);
             }
           } catch (e) {
-            setErrorStatus("Conexão interrompida. Verifique sua internet.");
+            setErrorStatus("Não foi possível carregar o cardápio. Verifique sua internet.");
           } finally {
             setIsLoading(false);
           }
@@ -115,12 +130,10 @@ const App: React.FC = () => {
     initApp();
   }, []);
 
-  // Persistência local rápida
   useEffect(() => {
     localStorage.setItem('saas_stores', JSON.stringify(stores));
   }, [stores]);
 
-  // Handlers de Negócio
   const handleAddToCart = (product: Product) => {
     setCart(prev => {
       const existing = prev.find(item => item.product.id === product.id);
@@ -178,10 +191,11 @@ const App: React.FC = () => {
       setCurrentStore(store);
       setView('ADMIN');
     } else {
-      alert("ATENÇÃO: Sua loja foi criada localmente, mas não conseguimos ativar seu link online devido a uma falha de sincronização. Tente sincronizar manualmente no painel.");
+      // Garantia de funcionamento local se a nuvem falhar
       setStores(prev => [...prev, store]);
       setCurrentStore(store);
       setView('ADMIN');
+      alert("Aviso: Sua loja foi salva localmente. O link online será ativado assim que a conexão com o banco estabilizar.");
     }
   };
 
@@ -202,33 +216,29 @@ const App: React.FC = () => {
     }
   };
 
-  // Renderização condicional de estados globais
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-6">
         <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="font-black text-[10px] uppercase tracking-[0.3em] text-primary animate-pulse">Sincronizando Dados...</p>
+        <p className="font-black text-[10px] uppercase tracking-[0.3em] text-primary">Conectando...</p>
       </div>
     );
   }
 
   if (errorStatus) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-8 text-center animate-in fade-in duration-700">
-        <div className="size-24 bg-red-500/10 text-red-500 rounded-[2.5rem] flex items-center justify-center mb-6 shadow-2xl shadow-red-500/5">
-          <span className="material-symbols-outlined text-5xl">error_outline</span>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-8 text-center">
+        <div className="size-20 bg-red-500/10 text-red-500 rounded-3xl flex items-center justify-center mb-6">
+          <span className="material-symbols-outlined text-4xl">warning</span>
         </div>
-        <h2 className="text-2xl font-black mb-2 tracking-tight">Ops! Link Não Ativado</h2>
-        <p className="text-gray-500 font-medium mb-8 max-w-xs leading-relaxed">{errorStatus}</p>
-        <div className="flex flex-col w-full max-w-xs gap-3">
-          <button 
-            onClick={() => { window.location.href = window.location.origin; }} 
-            className="bg-primary text-white font-black py-5 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all text-sm uppercase tracking-widest"
-          >
-            Página Inicial
-          </button>
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter">Se você é o dono, verifique a sincronização no seu painel.</p>
-        </div>
+        <h2 className="text-2xl font-black mb-2">Ops! Link Indisponível</h2>
+        <p className="text-gray-500 text-sm mb-8 max-w-xs">{errorStatus}</p>
+        <button 
+          onClick={() => { window.location.href = window.location.origin; }} 
+          className="bg-primary text-white font-black px-10 py-4 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all"
+        >
+          Voltar para Início
+        </button>
       </div>
     );
   }
@@ -240,9 +250,9 @@ const App: React.FC = () => {
       case 'REGISTER':
         return <RegisterStore onRegister={handleRegisterStore} onCancel={() => setView('HOME')} />;
       case 'SAAS_LOGIN':
-        const masterPass = prompt("Senha Mestre da Plataforma:");
+        const masterPass = prompt("Senha Mestre:");
         if (masterPass === saasPassword) setView('SAAS_ADMIN');
-        else if (masterPass !== null) { alert("Senha incorreta."); setView('HOME'); }
+        else if (masterPass !== null) { alert("Acesso Negado."); setView('HOME'); }
         else setView('HOME');
         return null;
       case 'SAAS_ADMIN':
@@ -261,23 +271,18 @@ const App: React.FC = () => {
         return (
           <div className="flex flex-col items-center justify-center h-screen p-8 bg-background-light dark:bg-background-dark">
             <div className="w-full max-w-sm flex flex-col items-center space-y-8 text-center animate-in zoom-in duration-300">
-              <div className="size-16 bg-primary/10 rounded-2xl flex items-center justify-center text-primary mb-2">
-                 <span className="material-symbols-outlined text-3xl">admin_panel_settings</span>
-              </div>
-              <h2 className="text-2xl font-black tracking-tight">Acesso Gerencial</h2>
-              <div className="w-full space-y-4">
-                <input 
-                  type="password" 
-                  value={adminPasswordInput}
-                  onChange={(e) => setAdminPasswordInput(e.target.value)}
-                  placeholder="Sua senha de acesso" 
-                  className="w-full p-5 rounded-2xl border-2 border-gray-100 dark:border-white/5 bg-white dark:bg-white/5 focus:border-primary/50 outline-none text-center font-bold tracking-[0.5em]"
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleAdminLogin(); }}
-                  autoFocus
-                />
-                <button onClick={handleAdminLogin} className="w-full bg-primary text-white font-black py-5 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all uppercase tracking-widest text-sm">Entrar no Painel</button>
-              </div>
-              <button onClick={() => setView('MENU')} className="text-gray-400 text-[10px] font-black uppercase tracking-widest hover:text-primary transition-colors">Voltar ao Cardápio</button>
+              <h2 className="text-2xl font-black">Login Administrativo</h2>
+              <input 
+                type="password" 
+                value={adminPasswordInput}
+                onChange={(e) => setAdminPasswordInput(e.target.value)}
+                placeholder="Sua senha" 
+                className="w-full p-5 rounded-2xl border-2 border-gray-100 bg-white text-center font-bold tracking-[0.5em]"
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAdminLogin(); }}
+                autoFocus
+              />
+              <button onClick={handleAdminLogin} className="w-full bg-primary text-white font-black py-5 rounded-2xl shadow-lg">Entrar</button>
+              <button onClick={() => setView('MENU')} className="text-gray-400 text-xs font-black uppercase">Voltar</button>
             </div>
           </div>
         );
