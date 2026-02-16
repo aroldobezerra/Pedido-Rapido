@@ -21,17 +21,22 @@ const App: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [errorStatus, setErrorStatus] = useState<string | null>(null);
   
   const [saasPassword, setSaasPassword] = useState(() => {
     return localStorage.getItem('saas_master_pass') || 'admin123';
   });
 
-  // Carregar dados iniciais e lidar com links diretos (?s=slug)
+  // Inicialização do App com foco em Roteamento de SaaS
   useEffect(() => {
     const initApp = async () => {
       setIsLoading(true);
+      setErrorStatus(null);
       
-      // 1. Carrega lojas locais (do dono do dispositivo)
+      const urlParams = new URLSearchParams(window.location.search);
+      const storeSlug = urlParams.get('s');
+
+      // 1. Carrega lojas locais (Contexto do Administrador/Dono)
       const savedStores = localStorage.getItem('saas_stores');
       let localStores: Store[] = [];
       if (savedStores) {
@@ -39,61 +44,66 @@ const App: React.FC = () => {
         setStores(localStores);
       }
       
-      // 2. Verifica se há um slug na URL para link direto
-      const urlParams = new URLSearchParams(window.location.search);
-      const storeSlug = urlParams.get('s');
-      
+      // 2. Lógica de Roteamento autoritativa por Slug
       if (storeSlug) {
-        // Busca primeiro localmente (mais rápido)
+        // Busca local primeiro para velocidade
         const foundLocal = localStores.find(s => s.slug === storeSlug);
+        
         if (foundLocal) {
           setCurrentStore(foundLocal);
           setView('MENU');
-        } else if (isSupabaseConfigured()) {
-          // Busca no banco de dados global se não encontrar localmente
+          setIsLoading(false);
+        } else {
+          // Se não estiver no localstorage, BUSCA OBRIGATÓRIA no Supabase
           try {
             const { data, error } = await supabase
               .from('stores')
               .select('content')
               .eq('slug', storeSlug)
-              .single();
+              .maybeSingle(); // maybeSingle não lança erro se não encontrar
             
             if (data && !error) {
               const remoteStore = data.content as Store;
               setCurrentStore(remoteStore);
               setView('MENU');
+            } else {
+              // Se chegamos aqui, a loja realmente não existe
+              setErrorStatus(`A lanchonete "@${storeSlug}" não foi encontrada em nossa base.`);
             }
           } catch (e) {
-            console.error("Erro ao buscar loja remota:", e);
+            console.error("Erro crítico de conexão:", e);
+            setErrorStatus("Erro ao conectar com o servidor. Verifique sua internet.");
+          } finally {
+            setIsLoading(false);
           }
         }
+      } else {
+        // Sem slug na URL, mostra a Landing Page normal
+        setIsLoading(false);
       }
-      
-      setIsLoading(false);
     };
 
     initApp();
   }, []);
 
-  // Persistir alterações de lojas localmente e no Supabase
+  // Persistência e Sincronização
   useEffect(() => {
     localStorage.setItem('saas_stores', JSON.stringify(stores));
     
-    // Sincronização em background com Supabase (se configurado)
     if (isSupabaseConfigured() && stores.length > 0) {
-      const syncStores = async () => {
+      const sync = async () => {
         for (const store of stores) {
-          await supabase
-            .from('stores')
-            .upsert({ 
+          try {
+            await supabase.from('stores').upsert({ 
               id: store.id, 
               slug: store.slug, 
               content: store, 
               updated_at: new Date() 
             }, { onConflict: 'slug' });
+          } catch (e) { console.warn("Erro de sincronização em background", e); }
         }
       };
-      syncStores();
+      sync();
     }
   }, [stores]);
 
@@ -109,10 +119,7 @@ const App: React.FC = () => {
     setCart(prev => {
       const existing = prev.find(item => item.product.id === product.id);
       if (existing) {
-        return prev.map(item => item.product.id === product.id 
-          ? { ...item, quantity: item.quantity + 1 } 
-          : item
-        );
+        return prev.map(item => item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
       }
       return [...prev, { product, quantity: 1, selectedExtras: [] }];
     });
@@ -200,13 +207,11 @@ const App: React.FC = () => {
   const handleUpdateStoreSettings = (settings: any) => {
     if (!currentStore) return;
     let updatedStore = { ...currentStore, ...settings };
-    
     if (settings._categoryAdd) {
       const cats = currentStore.categories || ['Hambúrgueres', 'Acompanhamentos', 'Bebidas'];
       updatedStore.categories = [...cats, settings._categoryAdd];
       delete updatedStore._categoryAdd;
     }
-    
     setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     setCurrentStore(updatedStore);
   };
@@ -220,11 +225,30 @@ const App: React.FC = () => {
     }
   };
 
+  // TELA DE LOADING E ERROS 404
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark">
         <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="font-black text-sm uppercase tracking-widest text-primary">Carregando Cardápio...</p>
+        <p className="font-black text-xs uppercase tracking-[0.3em] text-primary">Conectando ao Cardápio...</p>
+      </div>
+    );
+  }
+
+  if (errorStatus) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-8 text-center">
+        <div className="size-24 bg-red-500/10 text-red-500 rounded-[2.5rem] flex items-center justify-center mb-6">
+          <span className="material-symbols-outlined text-5xl">error_outline</span>
+        </div>
+        <h2 className="text-2xl font-black mb-2">Ops! Link Inválido</h2>
+        <p className="text-gray-500 font-medium mb-8 max-w-xs">{errorStatus}</p>
+        <button 
+          onClick={() => { window.location.href = window.location.origin; }} 
+          className="bg-primary text-white font-black px-8 py-4 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all"
+        >
+          Voltar para Início
+        </button>
       </div>
     );
   }
@@ -238,7 +262,7 @@ const App: React.FC = () => {
       case 'SAAS_LOGIN':
         const masterPass = prompt("Senha Mestre:");
         if (masterPass === saasPassword) setView('SAAS_ADMIN');
-        else if (masterPass !== null) { alert("Senha incorreta. Tente 'admin123'"); setView('HOME'); }
+        else if (masterPass !== null) { alert("Senha incorreta."); setView('HOME'); }
         else setView('HOME');
         return null;
       case 'SAAS_ADMIN':
@@ -264,7 +288,6 @@ const App: React.FC = () => {
                 <h2 className="text-2xl font-black tracking-tight">Login Administrativo</h2>
                 <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">Acesso Restrito à Gerência</p>
               </div>
-
               <div className="w-full space-y-4">
                 <input 
                   type="password" 
@@ -272,9 +295,7 @@ const App: React.FC = () => {
                   onChange={(e) => setAdminPasswordInput(e.target.value)}
                   placeholder="Senha da Loja" 
                   className="w-full p-5 rounded-2xl border-2 border-gray-100 dark:border-white/5 bg-white dark:bg-white/5 focus:border-primary/50 outline-none transition-all text-center font-bold tracking-[0.5em]"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleAdminLogin();
-                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleAdminLogin(); }}
                   autoFocus
                 />
                 <button 
@@ -284,13 +305,7 @@ const App: React.FC = () => {
                   Entrar no Painel
                 </button>
               </div>
-
-              <button 
-                onClick={() => setView('MENU')} 
-                className="text-gray-400 font-black uppercase text-[10px] tracking-widest hover:text-primary transition-colors"
-              >
-                Voltar ao Cardápio
-              </button>
+              <button onClick={() => setView('MENU')} className="text-gray-400 font-black uppercase text-[10px] tracking-widest hover:text-primary transition-colors">Voltar ao Cardápio</button>
             </div>
           </div>
         );
@@ -307,39 +322,14 @@ const App: React.FC = () => {
             subtotal={subtotal}
             onViewCart={() => setView('CART')}
             onViewAdmin={() => setView('ADMIN_LOGIN')}
-            onBack={() => setView('HOME')}
+            onBack={() => { window.location.href = window.location.origin; }}
           />
         );
       case 'CART':
-        return (
-          <CartView 
-            items={cart}
-            updateQuantity={handleUpdateQuantity}
-            clearCart={() => setCart([])}
-            onBack={() => setView('MENU')}
-            onProceed={(meta) => { 
-              setActiveOrder({ ...meta, items: cart, total: subtotal } as Order); 
-              setView('REVIEW'); 
-            }}
-            subtotal={subtotal}
-          />
-        );
+        return <CartView items={cart} updateQuantity={handleUpdateQuantity} clearCart={() => setCart([])} onBack={() => setView('MENU')} onProceed={(meta) => { setActiveOrder({ ...meta, items: cart, total: subtotal } as Order); setView('REVIEW'); }} subtotal={subtotal} />;
       case 'REVIEW':
         if (!activeOrder) return null;
-        return (
-          <OrderReview 
-            items={cart}
-            customerName={activeOrder.customerName}
-            address={activeOrder.address || ''}
-            method={activeOrder.deliveryMethod}
-            tableNumber={activeOrder.tableNumber}
-            pickupTime={activeOrder.pickupTime}
-            orderNotes={activeOrder.notes}
-            onBack={() => setView('CART')}
-            onConfirm={(msg) => handlePlaceOrder({ ...activeOrder, notes: msg })}
-            subtotal={subtotal}
-          />
-        );
+        return <OrderReview items={cart} customerName={activeOrder.customerName} address={activeOrder.address || ''} method={activeOrder.deliveryMethod} tableNumber={activeOrder.tableNumber} pickupTime={activeOrder.pickupTime} orderNotes={activeOrder.notes} onBack={() => setView('CART')} onConfirm={(msg) => handlePlaceOrder({ ...activeOrder, notes: msg })} subtotal={subtotal} />;
       case 'TRACK':
         if (!activeOrder) return null;
         return <OrderTracking order={activeOrder} onBack={() => setView('MENU')} />;
@@ -369,21 +359,14 @@ const App: React.FC = () => {
           />
         );
       case 'PRODUCT_FORM':
-        return (
-          <ProductForm 
-            categories={currentStore?.categories || ['Hambúrgueres', 'Acompanhamentos', 'Bebidas']}
-            product={editingProduct}
-            onSave={handleSaveProduct}
-            onCancel={() => setView('ADMIN')}
-          />
-        );
+        return <ProductForm categories={currentStore?.categories || ['Hambúrgueres', 'Acompanhamentos', 'Bebidas']} product={editingProduct} onSave={handleSaveProduct} onCancel={() => setView('ADMIN')} />;
       default:
         return <HomeView onRegister={() => setView('REGISTER')} onSaaSAdmin={() => setView('SAAS_LOGIN')} />;
     }
   };
 
   return (
-    <div className="min-h-screen bg-background-light dark:bg-background-dark text-gray-900 dark:text-gray-100">
+    <div className="min-h-screen bg-background-light dark:bg-background-dark text-gray-900 dark:text-gray-100 font-sans">
       {renderView()}
     </div>
   );
