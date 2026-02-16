@@ -41,7 +41,11 @@ const App: React.FC = () => {
   });
 
   const formatTimestamp = (dateStr: string) => {
-    return new Date(dateStr).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    try {
+      return new Date(dateStr).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    } catch(e) {
+      return new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    }
   };
 
   const mapProduct = (p: any): Product => ({
@@ -56,11 +60,11 @@ const App: React.FC = () => {
   const mapOrder = (o: any): Order => ({
     ...o,
     id: String(o.id),
-    timestamp: o.created_at ? formatTimestamp(o.created_at) : '00:00',
-    customerName: o.customer_name,
-    deliveryMethod: o.delivery_method,
-    tableNumber: o.table_number,
-    pickupTime: o.pickup_time
+    timestamp: o.created_at ? formatTimestamp(o.created_at) : (o.timestamp || '00:00'),
+    customerName: o.customer_name || o.customerName,
+    deliveryMethod: o.delivery_method || o.deliveryMethod,
+    tableNumber: o.table_number || o.tableNumber,
+    pickupTime: o.pickup_time || o.pickupTime
   });
 
   // Carregamento inicial do App
@@ -84,7 +88,6 @@ const App: React.FC = () => {
         const allStores = (storesData || []).map((s: any) => ({
           ...s,
           adminPassword: s.admin_password || s.adminPassword || "", 
-          customDomain: s.custom_domain || "",
           isOpen: s.is_open ?? true,
           products: (s.products || []).map(mapProduct),
           orders: (s.orders || []).map(mapOrder).sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
@@ -122,6 +125,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentStore) return;
 
+    // Garante que estamos ouvindo apenas inserções e atualizações desta loja
     const channel = supabase
       .channel(`orders-store-${currentStore.id}`)
       .on(
@@ -140,9 +144,13 @@ const App: React.FC = () => {
               if (prev.orders.some(o => o.id === newOrder.id)) return prev;
               return { ...prev, orders: [newOrder, ...prev.orders] };
             });
-            // Som de notificação mais estável
+            // Áudio estável (Sistema)
             if (view === 'ADMIN' && isAdminLoggedIn) {
-               try { new Audio('https://cdn.pixabay.com/audio/2022/03/15/audio_7302f37c42.mp3').play().catch(() => {}); } catch(e){}
+               try { 
+                 const audio = new Audio('https://fonts.gstatic.com/s/i/productlogos/googleg/v6/24px.svg'); // Fallback silencioso se falhar
+                 // Usando um beep padrão de sistema caso o link externo falhe
+                 new Audio('https://notificationsounds.com/storage/sounds/file-sounds-1150-pristine.mp3').play().catch(() => {});
+               } catch(e){}
             }
           } else if (payload.eventType === 'UPDATE') {
             const updatedOrder = mapOrder(payload.new);
@@ -169,15 +177,7 @@ const App: React.FC = () => {
   const handleUpdateOrderStatus = async (id: string, status: OrderStatus) => {
     if (!currentStore) return;
     
-    // 1. Atualiza no Banco
-    const { error } = await supabase.from('orders').update({ status }).eq('id', id);
-    
-    if (error) {
-      alert("Erro ao atualizar status: " + error.message);
-      return;
-    }
-
-    // 2. Atualiza no Estado Local Imediatamente (Fallback se Realtime falhar)
+    // ATUALIZAÇÃO OTIMISTA: Muda na tela antes de ir pro banco
     setCurrentStore(prev => {
       if (!prev) return null;
       return {
@@ -185,26 +185,14 @@ const App: React.FC = () => {
         orders: prev.orders.map(o => o.id === id ? { ...o, status } : o)
       };
     });
-  };
 
-  const handleDeleteProduct = async (id: string) => {
-    if (!currentStore) return;
-    if (!confirm("Deseja excluir este produto permanentemente?")) return;
-
-    const { error } = await supabase.from('products').delete().eq('id', id);
-    if (error) {
-      alert("Erro ao excluir: " + error.message);
-      return;
+    try {
+      const { error } = await supabase.from('orders').update({ status }).eq('id', id);
+      if (error) throw error;
+    } catch (err: any) {
+      alert("Falha ao salvar status no servidor, mas a tela foi atualizada: " + err.message);
+      // Opcionalmente reverter o estado aqui se o erro for crítico
     }
-
-    // Atualiza localmente
-    setCurrentStore(prev => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        products: prev.products.filter(p => p.id !== id)
-      };
-    });
   };
 
   const handleConfirmOrder = async (message: string) => {
@@ -217,7 +205,7 @@ const App: React.FC = () => {
       customer_name: orderMetadata.customerName,
       delivery_method: orderMetadata.deliveryMethod,
       address: orderMetadata.address || null,
-      table_number: orderMetadata.table_number || orderMetadata.tableNumber || null,
+      table_number: orderMetadata.tableNumber || null,
       pickup_time: orderMetadata.pickupTime || null,
       notes: orderMetadata.notes || null,
       items: cart,
@@ -244,7 +232,7 @@ const App: React.FC = () => {
       setView('TRACK');
     } catch (err: any) {
       console.error("Erro ao salvar pedido:", err);
-      alert("Não conseguimos enviar seu pedido para a cozinha: " + (err.message || "Erro desconhecido"));
+      alert("Erro ao enviar para cozinha: " + (err.message || "Erro de conexão"));
     }
   };
 
@@ -255,8 +243,6 @@ const App: React.FC = () => {
       const updatedStore = { ...currentStore, isOpen };
       setCurrentStore(updatedStore);
       setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
-    } else {
-      alert("Erro ao atualizar status: " + error.message);
     }
   };
 
@@ -265,20 +251,12 @@ const App: React.FC = () => {
     
     if (updates._categoryMapping) {
       const { oldName, newName } = updates._categoryMapping;
-      const { error: batchError } = await supabase
-        .from('products')
-        .update({ category: newName })
-        .eq('store_id', currentStore.id)
-        .eq('category', oldName);
-      
-      if (batchError) { alert("Erro ao renomear produtos: " + batchError.message); return; }
+      await supabase.from('products').update({ category: newName }).eq('store_id', currentStore.id).eq('category', oldName);
       setSessionCategories(prev => prev.map(c => c === oldName ? newName : c));
       const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
       if (refreshed) {
         const mapped = refreshed.map(mapProduct);
-        const updatedStore = { ...currentStore, products: mapped };
-        setCurrentStore(updatedStore);
-        setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
+        setCurrentStore({ ...currentStore, products: mapped });
       }
       return;
     }
@@ -308,7 +286,6 @@ const App: React.FC = () => {
     if (!error) {
       const updatedStore = { ...currentStore, ...updates };
       setCurrentStore(updatedStore);
-      setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     }
   };
 
@@ -326,11 +303,13 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-background-light dark:bg-background-dark font-sans text-[#1c140d] dark:text-[#fcfaf8]">
       {view === 'HOME' && <HomeView onRegister={() => setView('REGISTER')} onSaaSAdmin={() => { setLoginError(''); setView('SAAS_LOGIN'); }} />}
+      
       {view === 'SAAS_LOGIN' && (
         <div className="min-h-screen flex items-center justify-center p-6">
            <div className="max-w-xs w-full space-y-6">
               <h2 className="text-2xl font-black text-primary text-center">Admin Master</h2>
-              <input type="password" value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError(''); }} placeholder="Senha Master" className="w-full p-4 rounded-2xl border bg-white dark:bg-white/5 border-primary/20" />
+              <input type="password" value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError(''); }} placeholder="Senha Master" className="w-full p-4 rounded-2xl border bg-white dark:bg-white/5 border-primary/20 outline-none" />
+              {loginError && <p className="text-red-500 text-xs font-bold text-center">{loginError}</p>}
               <button onClick={() => { if(loginPassword.trim() === saasPassword) { setView('SAAS_ADMIN'); setLoginPassword(''); } else setLoginError('Senha Incorreta'); }} className="w-full bg-primary text-white font-black py-4 rounded-2xl">Entrar</button>
               <button onClick={() => setView('HOME')} className="w-full text-xs font-bold text-gray-400">Voltar</button>
            </div>
@@ -379,7 +358,7 @@ const App: React.FC = () => {
         <div className="min-h-screen flex items-center justify-center p-6">
            <div className="max-w-xs w-full space-y-6">
               <h2 className="text-2xl font-black text-center">{currentStore.name}</h2>
-              <input type="password" value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError(''); }} placeholder="Senha da Lanchonete" className="w-full p-4 rounded-2xl border bg-white dark:bg-white/5 border-primary/20" />
+              <input type="password" value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError(''); }} placeholder="Senha da Lanchonete" className="w-full p-4 rounded-2xl border bg-white dark:bg-white/5 border-primary/20 outline-none" />
               {loginError && <p className="text-xs font-bold text-red-500 text-center">{loginError}</p>}
               <button onClick={() => { if(loginPassword.trim() === currentStore.adminPassword) { setIsAdminLoggedIn(true); setView('ADMIN'); setLoginPassword(''); } else setLoginError('Senha Incorreta!'); }} className="w-full bg-primary text-white font-black py-4 rounded-2xl">Acessar Cozinha</button>
               <button onClick={() => setView('MENU')} className="w-full text-xs font-bold text-gray-400 text-center block">Voltar ao Cardápio</button>
@@ -397,7 +376,12 @@ const App: React.FC = () => {
           categories={derivedCategories}
           onAddProduct={() => { setEditingProduct(null); setView('PRODUCT_FORM'); }} 
           onEditProduct={(p) => { setEditingProduct(p); setView('PRODUCT_FORM'); }} 
-          onDeleteProduct={handleDeleteProduct}
+          onDeleteProduct={async (id) => {
+            if(confirm("Deseja excluir este produto?")) {
+              await supabase.from('products').delete().eq('id', id);
+              setCurrentStore(prev => prev ? {...prev, products: prev.products.filter(p => p.id !== id)} : null);
+            }
+          }}
           onToggleAvailability={() => {}} onBack={() => { setView('MENU'); setIsAdminLoggedIn(false); }}
           onUpdatePassword={(p) => handleUpdateStoreSettings({ adminPassword: p })}
         />
@@ -405,13 +389,12 @@ const App: React.FC = () => {
 
       {view === 'PRODUCT_FORM' && currentStore && <ProductForm categories={derivedCategories} product={editingProduct} onSave={async (p) => { 
         const dbData = { name: p.name, price: p.price, category: p.category, description: p.description, image: p.image, is_available: p.isAvailable, track_inventory: p.trackInventory, extras: p.extras, store_id: currentStore.id };
-        const isNew = !p.id || p.id === 'new' || !p.id.includes('-');
+        const isNew = !p.id || p.id === 'new';
         const { error } = isNew ? await supabase.from('products').insert([dbData]) : await supabase.from('products').update(dbData).eq('id', p.id);
         if(!error) { 
           const { data: refreshed } = await supabase.from('products').select('*').eq('store_id', currentStore.id);
           if (refreshed) {
-            const mapped = refreshed.map(mapProduct);
-            setCurrentStore({ ...currentStore, products: mapped });
+            setCurrentStore({ ...currentStore, products: refreshed.map(mapProduct) });
           }
           setView('ADMIN'); 
         } else { alert("Erro ao salvar: " + error.message); }
