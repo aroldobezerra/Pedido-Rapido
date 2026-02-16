@@ -1,6 +1,6 @@
 
-import React, { useState } from 'react';
-import { Store } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Store, sanitizeSlug } from '../types';
 import { INITIAL_PRODUCTS } from '../constants';
 
 interface RegisterStoreProps {
@@ -16,32 +16,42 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
   const [showPass, setShowPass] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Sanitização automática do slug enquanto digita o nome (opcional)
+  useEffect(() => {
+    if (name && !slug) {
+      // Sugestão inicial de slug baseada no nome
+      // mas deixamos o usuário editar depois
+    }
+  }, [name]);
+
+  const finalSlug = sanitizeSlug(slug || name);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !slug || !whatsapp || !password) {
-      alert("Por favor, preencha todos os campos.");
+    if (!name || !finalSlug || !whatsapp || !password) {
+      alert("Preencha todos os campos corretamente.");
       return;
     }
 
     setIsSubmitting(true);
 
-    try {
-      const newStore: Store = {
-        id: Date.now().toString(),
-        name: name.trim(),
-        slug: slug.toLowerCase().replace(/\s/g, '-').replace(/[^a-z0-9-]/g, '').trim(),
-        whatsapp: whatsapp.replace(/\D/g, '').trim(),
-        adminPassword: password.trim(),
-        products: [...INITIAL_PRODUCTS],
-        orders: [],
-        createdAt: Date.now(),
-        isOpen: true
-      };
+    const newStore: Store = {
+      id: Date.now().toString(),
+      name: name.trim(),
+      slug: finalSlug,
+      whatsapp: whatsapp.replace(/\D/g, '').trim(),
+      adminPassword: password.trim(),
+      products: [...INITIAL_PRODUCTS],
+      orders: [],
+      createdAt: Date.now(),
+      isOpen: true,
+      categories: ['Hambúrgueres', 'Acompanhamentos', 'Bebidas']
+    };
 
+    try {
       await onRegister(newStore);
     } catch (err) {
-      console.error("Erro ao cadastrar loja:", err);
-      alert("Ocorreu um erro ao processar os dados. Tente novamente.");
+      alert("Erro ao cadastrar. Verifique sua internet.");
     } finally {
       setIsSubmitting(false);
     }
@@ -50,68 +60,71 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
   return (
     <div className="flex flex-col min-h-screen bg-background-light dark:bg-background-dark px-6 py-12">
       <header className="max-w-md mx-auto w-full flex items-center gap-4 mb-8">
-        <button onClick={onCancel} className="text-primary hover:bg-primary/10 p-2 rounded-full transition-colors">
+        <button onClick={onCancel} className="text-primary p-2 rounded-full transition-colors">
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
-        <h1 className="text-2xl font-black tracking-tight">Novo Cadastro</h1>
+        <h1 className="text-2xl font-black tracking-tight">Criar Lanchonete</h1>
       </header>
 
       {isSubmitting ? (
-        <div className="max-w-md mx-auto w-full flex flex-col items-center justify-center py-20 animate-in fade-in duration-500">
+        <div className="max-w-md mx-auto w-full flex flex-col items-center justify-center py-20 text-center">
            <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mb-6"></div>
-           <h3 className="text-xl font-black mb-2">Criando seu Império...</h3>
-           <p className="text-sm text-gray-500 font-bold uppercase tracking-widest text-center">Estamos ativando seu link global e preparando seu cardápio com IA.</p>
+           <h3 className="text-xl font-black mb-2">Sincronizando Link...</h3>
+           <p className="text-sm text-gray-400">Garantindo que seu cardápio seja acessível globalmente.</p>
         </div>
       ) : (
-        <form onSubmit={handleSubmit} className="max-w-md mx-auto w-full space-y-6 animate-in slide-in-from-bottom duration-500">
+        <form onSubmit={handleSubmit} className="max-w-md mx-auto w-full space-y-6">
           <div className="space-y-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">Nome da Lanchonete</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">Nome Comercial</label>
               <input 
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-4 focus:ring-4 focus:ring-primary/20 outline-none transition-all"
-                placeholder="Ex: Burger King Gourmet"
+                className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-4 font-bold"
+                placeholder="Ex: Burger Prime"
               />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">Identificador (Slug para URL)</label>
-              <div className="relative">
-                <span className="absolute left-4 top-4 text-gray-400 font-bold">@</span>
-                <input 
-                  required
-                  value={slug}
-                  onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-                  className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-4 pl-9 focus:ring-4 focus:ring-primary/20 outline-none transition-all"
-                  placeholder="Ex: burger-king-gourmet"
-                />
+              <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">Identificador do Link (@)</label>
+              <input 
+                required
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+                className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-4 font-mono font-bold"
+                placeholder="Ex: burger-prime"
+              />
+              <div className="bg-primary/5 p-3 rounded-xl border border-primary/10">
+                 <p className="text-[10px] font-black uppercase text-primary mb-1">Seu link será:</p>
+                 <p className="text-[12px] font-mono break-all opacity-60">
+                    {window.location.origin}/?s=<span className="text-primary font-bold">{finalSlug || '...'}</span>
+                 </p>
               </div>
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">WhatsApp (com DDD)</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">WhatsApp de Vendas</label>
               <input 
                 required
                 type="tel"
                 value={whatsapp}
                 onChange={(e) => setWhatsapp(e.target.value)}
-                className="w-full bg-white dark:bg-white/5 border border-gray-100 dark:border-white/10 rounded-2xl p-4 focus:ring-4 focus:ring-primary/20 outline-none transition-all"
-                placeholder="Ex: 5511999999999"
+                className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-4 font-bold"
+                placeholder="DDD + Número"
               />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">Senha de Admin</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-[#9c7349]">Senha de Acesso ao Painel</label>
               <div className="relative">
                 <input 
                   required
                   type={showPass ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-white dark:bg-white/5 border border-gray-100 dark:border-white/10 rounded-2xl p-4 focus:ring-4 focus:ring-primary/20 outline-none transition-all"
-                  placeholder="Sua senha secreta"
+                  className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-4 font-bold"
+                  placeholder="Min. 4 caracteres"
                 />
                 <button 
                   type="button" 
@@ -121,7 +134,6 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
                   <span className="material-symbols-outlined text-sm">{showPass ? 'visibility_off' : 'visibility'}</span>
                 </button>
               </div>
-              <p className="text-[10px] text-gray-400 px-1 italic">Essa senha será usada para acessar seu painel de vendas.</p>
             </div>
           </div>
 
@@ -129,7 +141,7 @@ const RegisterStore: React.FC<RegisterStoreProps> = ({ onRegister, onCancel }) =
             type="submit"
             className="w-full bg-primary text-white font-black py-4 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all mt-8"
           >
-            Finalizar e Ativar Link
+            Confirmar e Ativar Agora
           </button>
         </form>
       )}

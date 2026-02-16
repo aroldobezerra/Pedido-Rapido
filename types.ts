@@ -18,7 +18,7 @@ export interface Product {
   id: string;
   name: string;
   price: number;
-  category: string; // Mudado de Category enum para string para suportar customização
+  category: string;
   description: string;
   image: string;
   extras: Extra[];
@@ -33,7 +33,7 @@ export interface Store {
   whatsapp: string;
   adminPassword: string;
   customDomain?: string;
-  categories?: string[]; // Lista customizada de categorias
+  categories?: string[];
   products: Product[];
   orders: Order[];
   createdAt: number;
@@ -66,3 +66,19 @@ export interface Order {
 }
 
 export type AppView = 'HOME' | 'REGISTER' | 'MENU' | 'CART' | 'REVIEW' | 'TRACK' | 'ADMIN' | 'PRODUCT_FORM' | 'ADMIN_LOGIN' | 'SAAS_ADMIN' | 'SAAS_LOGIN';
+
+/**
+ * Utilitário global para garantir que o slug da URL seja sempre compatível
+ * com o que está gravado no banco de dados.
+ */
+export const sanitizeSlug = (text: string): string => {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove acentos
+    .replace(/\s+/g, '-')           // Espaços viram hífens
+    .replace(/[^a-z0-9-]/g, '')     // Remove caracteres especiais
+    .replace(/-+/g, '-')            // Remove hífens duplicados
+    .trim()
+    .replace(/^-+|-+$/g, '');       // Remove hífens no início/fim
+};

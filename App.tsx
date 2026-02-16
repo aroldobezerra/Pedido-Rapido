@@ -28,27 +28,35 @@ const App: React.FC = () => {
     return localStorage.getItem('saas_master_pass') || 'admin123';
   });
 
+  /**
+   * Sincroniza a loja com a nuvem de forma segura.
+   * Removido 'updated_at' para evitar erro 42703 (coluna inexistente).
+   */
   const syncStoreToCloud = async (store: Store) => {
     if (!isSupabaseConfigured()) return false;
     try {
       setIsSyncing(true);
+      // Usando apenas colunas essenciais que existem por padrão em tabelas de integração rápida
       const { error } = await supabase.from('stores').upsert({ 
         id: store.id, 
         slug: store.slug, 
-        content: store, 
-        updated_at: new Date() 
+        content: store
       }, { onConflict: 'slug' });
       
-      if (error) throw error;
+      if (error) {
+        console.error("Erro Supabase:", error.message);
+        throw error;
+      }
       return true;
     } catch (e) {
-      console.error("Erro na sincronização:", e);
+      console.error("Falha na sincronização crítica:", e);
       return false;
     } finally {
       setIsSyncing(false);
     }
   };
 
+  // Inicialização do App com foco em Roteamento Robusto
   useEffect(() => {
     const initApp = async () => {
       setIsLoading(true);
@@ -67,7 +75,7 @@ const App: React.FC = () => {
       if (rawSlug) {
         const storeSlug = sanitizeSlug(rawSlug);
         
-        // 1. Busca Local
+        // 1. Tenta encontrar localmente primeiro (UX instantânea para o dono)
         const foundLocal = localStores.find(s => s.slug === storeSlug);
         
         if (foundLocal) {
@@ -75,7 +83,7 @@ const App: React.FC = () => {
           setView('MENU');
           setIsLoading(false);
         } else {
-          // 2. Busca Remota com Retry simples para evitar falso negativo
+          // 2. Busca na Nuvem com tratamento de erro específico para colunas (42703)
           try {
             const { data, error } = await supabase
               .from('stores')
@@ -83,15 +91,18 @@ const App: React.FC = () => {
               .eq('slug', storeSlug)
               .maybeSingle();
             
-            if (data && !error) {
+            if (error) {
+              console.error("Erro de busca remota:", error);
+              setErrorStatus(`Erro no servidor de dados (Cód: ${error.code}). Por favor, contate o suporte.`);
+            } else if (data) {
               const remoteStore = data.content as Store;
               setCurrentStore(remoteStore);
               setView('MENU');
             } else {
-              setErrorStatus(`A lanchonete "@${storeSlug}" não foi encontrada. O link pode estar incorreto ou a loja ainda não foi sincronizada.`);
+              setErrorStatus(`A lanchonete "@${storeSlug}" ainda não foi publicada ou o link está incorreto.`);
             }
           } catch (e) {
-            setErrorStatus("Não foi possível conectar ao servidor. Verifique sua conexão.");
+            setErrorStatus("Conexão interrompida. Verifique sua internet.");
           } finally {
             setIsLoading(false);
           }
@@ -104,10 +115,12 @@ const App: React.FC = () => {
     initApp();
   }, []);
 
+  // Persistência local rápida
   useEffect(() => {
     localStorage.setItem('saas_stores', JSON.stringify(stores));
   }, [stores]);
 
+  // Handlers de Negócio
   const handleAddToCart = (product: Product) => {
     setCart(prev => {
       const existing = prev.find(item => item.product.id === product.id);
@@ -149,20 +162,23 @@ const App: React.FC = () => {
     const updatedStore = { ...currentStore, orders: [...(currentStore.orders || []), newOrder] };
     setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     setCurrentStore(updatedStore);
-    syncStoreToCloud(updatedStore);
+    syncStoreToCloud(updatedStore); 
     setActiveOrder(newOrder);
     setCart([]);
     setView('TRACK');
   };
 
   const handleRegisterStore = async (store: Store) => {
+    setIsLoading(true);
     const success = await syncStoreToCloud(store);
+    setIsLoading(false);
+
     if (success) {
       setStores(prev => [...prev, store]);
       setCurrentStore(store);
       setView('ADMIN');
     } else {
-      alert("Falha crítica na nuvem. A loja foi criada apenas localmente. Use o botão de sincronização no painel.");
+      alert("ATENÇÃO: Sua loja foi criada localmente, mas não conseguimos ativar seu link online devido a uma falha de sincronização. Tente sincronizar manualmente no painel.");
       setStores(prev => [...prev, store]);
       setCurrentStore(store);
       setView('ADMIN');
@@ -171,7 +187,7 @@ const App: React.FC = () => {
 
   const handleUpdateStoreSettings = async (settings: any) => {
     if (!currentStore) return;
-    let updatedStore = { ...currentStore, ...settings };
+    const updatedStore = { ...currentStore, ...settings };
     setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     setCurrentStore(updatedStore);
     await syncStoreToCloud(updatedStore);
@@ -186,29 +202,33 @@ const App: React.FC = () => {
     }
   };
 
+  // Renderização condicional de estados globais
   if (isLoading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-6">
         <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="font-black text-xs uppercase tracking-[0.3em] text-primary">Carregando...</p>
+        <p className="font-black text-[10px] uppercase tracking-[0.3em] text-primary animate-pulse">Sincronizando Dados...</p>
       </div>
     );
   }
 
   if (errorStatus) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-8 text-center animate-in fade-in duration-500">
-        <div className="size-24 bg-red-500/10 text-red-500 rounded-[2.5rem] flex items-center justify-center mb-6">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-8 text-center animate-in fade-in duration-700">
+        <div className="size-24 bg-red-500/10 text-red-500 rounded-[2.5rem] flex items-center justify-center mb-6 shadow-2xl shadow-red-500/5">
           <span className="material-symbols-outlined text-5xl">error_outline</span>
         </div>
-        <h2 className="text-2xl font-black mb-2">Ops! Loja não encontrada</h2>
-        <p className="text-gray-500 font-medium mb-8 max-w-xs">{errorStatus}</p>
-        <button 
-          onClick={() => { window.location.href = window.location.origin; }} 
-          className="bg-primary text-white font-black px-8 py-4 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all"
-        >
-          Ir para Página Inicial
-        </button>
+        <h2 className="text-2xl font-black mb-2 tracking-tight">Ops! Link Não Ativado</h2>
+        <p className="text-gray-500 font-medium mb-8 max-w-xs leading-relaxed">{errorStatus}</p>
+        <div className="flex flex-col w-full max-w-xs gap-3">
+          <button 
+            onClick={() => { window.location.href = window.location.origin; }} 
+            className="bg-primary text-white font-black py-5 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all text-sm uppercase tracking-widest"
+          >
+            Página Inicial
+          </button>
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter">Se você é o dono, verifique a sincronização no seu painel.</p>
+        </div>
       </div>
     );
   }
@@ -220,7 +240,7 @@ const App: React.FC = () => {
       case 'REGISTER':
         return <RegisterStore onRegister={handleRegisterStore} onCancel={() => setView('HOME')} />;
       case 'SAAS_LOGIN':
-        const masterPass = prompt("Senha Mestre:");
+        const masterPass = prompt("Senha Mestre da Plataforma:");
         if (masterPass === saasPassword) setView('SAAS_ADMIN');
         else if (masterPass !== null) { alert("Senha incorreta."); setView('HOME'); }
         else setView('HOME');
@@ -240,19 +260,24 @@ const App: React.FC = () => {
       case 'ADMIN_LOGIN':
         return (
           <div className="flex flex-col items-center justify-center h-screen p-8 bg-background-light dark:bg-background-dark">
-            <div className="w-full max-w-sm flex flex-col items-center space-y-8 text-center">
-              <h2 className="text-2xl font-black">Login Administrativo</h2>
-              <input 
-                type="password" 
-                value={adminPasswordInput}
-                onChange={(e) => setAdminPasswordInput(e.target.value)}
-                placeholder="Senha da Loja" 
-                className="w-full p-5 rounded-2xl border-2 text-center font-bold tracking-[0.5em]"
-                onKeyDown={(e) => { if (e.key === 'Enter') handleAdminLogin(); }}
-                autoFocus
-              />
-              <button onClick={handleAdminLogin} className="w-full bg-primary text-white font-black py-5 rounded-2xl">Entrar</button>
-              <button onClick={() => setView('MENU')} className="text-gray-400 text-xs font-black uppercase">Voltar</button>
+            <div className="w-full max-w-sm flex flex-col items-center space-y-8 text-center animate-in zoom-in duration-300">
+              <div className="size-16 bg-primary/10 rounded-2xl flex items-center justify-center text-primary mb-2">
+                 <span className="material-symbols-outlined text-3xl">admin_panel_settings</span>
+              </div>
+              <h2 className="text-2xl font-black tracking-tight">Acesso Gerencial</h2>
+              <div className="w-full space-y-4">
+                <input 
+                  type="password" 
+                  value={adminPasswordInput}
+                  onChange={(e) => setAdminPasswordInput(e.target.value)}
+                  placeholder="Sua senha de acesso" 
+                  className="w-full p-5 rounded-2xl border-2 border-gray-100 dark:border-white/5 bg-white dark:bg-white/5 focus:border-primary/50 outline-none text-center font-bold tracking-[0.5em]"
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleAdminLogin(); }}
+                  autoFocus
+                />
+                <button onClick={handleAdminLogin} className="w-full bg-primary text-white font-black py-5 rounded-2xl shadow-xl shadow-primary/20 active:scale-95 transition-all uppercase tracking-widest text-sm">Entrar no Painel</button>
+              </div>
+              <button onClick={() => setView('MENU')} className="text-gray-400 text-[10px] font-black uppercase tracking-widest hover:text-primary transition-colors">Voltar ao Cardápio</button>
             </div>
           </div>
         );
