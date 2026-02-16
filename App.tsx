@@ -10,11 +10,8 @@ import ProductForm from './views/ProductForm';
 import HomeView from './views/HomeView';
 import RegisterStore from './views/RegisterStore';
 import SaaSAdminDashboard from './views/SaaSAdminDashboard';
+import { supabase, isSupabaseConfigured } from './services/supabaseClient';
 
-/**
- * The main App component manages application state, including routing between views,
- * shopping cart persistence, and store data management.
- */
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>('HOME');
   const [stores, setStores] = useState<Store[]>([]);
@@ -22,41 +19,83 @@ const App: React.FC = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   
-  // Initialize master password from localStorage or use default
   const [saasPassword, setSaasPassword] = useState(() => {
     return localStorage.getItem('saas_master_pass') || 'admin123';
   });
 
-  // Load stores from LocalStorage and handle direct store linking via slug
+  // Carregar dados iniciais e lidar com links diretos (?s=slug)
   useEffect(() => {
-    const savedStores = localStorage.getItem('saas_stores');
-    let parsedStores: Store[] = [];
-    
-    if (savedStores) {
-      parsedStores = JSON.parse(savedStores);
-      setStores(parsedStores);
-    }
-    
-    // Independent slug detection: works even if localStorage was empty
-    const urlParams = new URLSearchParams(window.location.search);
-    const storeSlug = urlParams.get('s');
-    
-    if (storeSlug) {
-      const found = parsedStores.find((s: Store) => s.slug === storeSlug);
-      if (found) {
-        setCurrentStore(found);
-        setView('MENU');
+    const initApp = async () => {
+      setIsLoading(true);
+      
+      // 1. Carrega lojas locais (do dono do dispositivo)
+      const savedStores = localStorage.getItem('saas_stores');
+      let localStores: Store[] = [];
+      if (savedStores) {
+        localStores = JSON.parse(savedStores);
+        setStores(localStores);
       }
-    }
+      
+      // 2. Verifica se há um slug na URL para link direto
+      const urlParams = new URLSearchParams(window.location.search);
+      const storeSlug = urlParams.get('s');
+      
+      if (storeSlug) {
+        // Busca primeiro localmente (mais rápido)
+        const foundLocal = localStores.find(s => s.slug === storeSlug);
+        if (foundLocal) {
+          setCurrentStore(foundLocal);
+          setView('MENU');
+        } else if (isSupabaseConfigured()) {
+          // Busca no banco de dados global se não encontrar localmente
+          try {
+            const { data, error } = await supabase
+              .from('stores')
+              .select('content')
+              .eq('slug', storeSlug)
+              .single();
+            
+            if (data && !error) {
+              const remoteStore = data.content as Store;
+              setCurrentStore(remoteStore);
+              setView('MENU');
+            }
+          } catch (e) {
+            console.error("Erro ao buscar loja remota:", e);
+          }
+        }
+      }
+      
+      setIsLoading(false);
+    };
+
+    initApp();
   }, []);
 
-  // Sync store changes to local storage
+  // Persistir alterações de lojas localmente e no Supabase
   useEffect(() => {
     localStorage.setItem('saas_stores', JSON.stringify(stores));
+    
+    // Sincronização em background com Supabase (se configurado)
+    if (isSupabaseConfigured() && stores.length > 0) {
+      const syncStores = async () => {
+        for (const store of stores) {
+          await supabase
+            .from('stores')
+            .upsert({ 
+              id: store.id, 
+              slug: store.slug, 
+              content: store, 
+              updated_at: new Date() 
+            }, { onConflict: 'slug' });
+        }
+      };
+      syncStores();
+    }
   }, [stores]);
 
-  // Sync master password changes
   useEffect(() => {
     localStorage.setItem('saas_master_pass', saasPassword);
   }, [saasPassword]);
@@ -102,7 +141,7 @@ const App: React.FC = () => {
       deliveryMethod: (orderMeta.deliveryMethod as any) || 'Delivery',
       tableNumber: orderMeta.tableNumber,
       pickupTime: orderMeta.pickupTime,
-      notes: orderMeta.notes, // Important: passing the general notes
+      notes: orderMeta.notes,
       total: subtotal + (orderMeta.deliveryMethod === 'Delivery' ? 5 : 0)
     };
 
@@ -170,6 +209,15 @@ const App: React.FC = () => {
     setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     setCurrentStore(updatedStore);
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark">
+        <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p className="font-black text-sm uppercase tracking-widest text-primary">Carregando Cardápio...</p>
+      </div>
+    );
+  }
 
   const renderView = () => {
     switch (view) {
