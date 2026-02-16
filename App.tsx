@@ -22,23 +22,31 @@ const App: React.FC = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [saasPassword, setSaasPassword] = useState('admin123');
+  
+  // Initialize master password from localStorage or use default
+  const [saasPassword, setSaasPassword] = useState(() => {
+    return localStorage.getItem('saas_master_pass') || 'admin123';
+  });
 
   // Load stores from LocalStorage and handle direct store linking via slug
   useEffect(() => {
     const savedStores = localStorage.getItem('saas_stores');
+    let parsedStores: Store[] = [];
+    
     if (savedStores) {
-      const parsed = JSON.parse(savedStores);
-      setStores(parsed);
-      
-      const urlParams = new URLSearchParams(window.location.search);
-      const storeSlug = urlParams.get('s');
-      if (storeSlug) {
-        const found = parsed.find((s: Store) => s.slug === storeSlug);
-        if (found) {
-          setCurrentStore(found);
-          setView('MENU');
-        }
+      parsedStores = JSON.parse(savedStores);
+      setStores(parsedStores);
+    }
+    
+    // Independent slug detection: works even if localStorage was empty
+    const urlParams = new URLSearchParams(window.location.search);
+    const storeSlug = urlParams.get('s');
+    
+    if (storeSlug) {
+      const found = parsedStores.find((s: Store) => s.slug === storeSlug);
+      if (found) {
+        setCurrentStore(found);
+        setView('MENU');
       }
     }
   }, []);
@@ -47,6 +55,11 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('saas_stores', JSON.stringify(stores));
   }, [stores]);
+
+  // Sync master password changes
+  useEffect(() => {
+    localStorage.setItem('saas_master_pass', saasPassword);
+  }, [saasPassword]);
 
   const subtotal = useMemo(() => {
     return cart.reduce((acc, item) => acc + (item.product.price * item.quantity), 0);
@@ -89,7 +102,7 @@ const App: React.FC = () => {
       deliveryMethod: (orderMeta.deliveryMethod as any) || 'Delivery',
       tableNumber: orderMeta.tableNumber,
       pickupTime: orderMeta.pickupTime,
-      notes: orderMeta.notes,
+      notes: orderMeta.notes, // Important: passing the general notes
       total: subtotal + (orderMeta.deliveryMethod === 'Delivery' ? 5 : 0)
     };
 
@@ -100,7 +113,6 @@ const App: React.FC = () => {
     setCart([]);
     setView('TRACK');
 
-    // WhatsApp integration: The notes field contains the pre-formatted WhatsApp message
     if (orderMeta.notes && orderMeta.notes.includes('🍔')) {
        const phone = currentStore.whatsapp;
        const url = `https://wa.me/${phone}?text=${encodeURIComponent(orderMeta.notes)}`;
@@ -168,7 +180,8 @@ const App: React.FC = () => {
       case 'SAAS_LOGIN':
         const masterPass = prompt("Senha Mestre:");
         if (masterPass === saasPassword) setView('SAAS_ADMIN');
-        else { alert("Senha incorreta"); setView('HOME'); }
+        else if (masterPass !== null) { alert("Senha incorreta. Tente 'admin123'"); setView('HOME'); }
+        else setView('HOME');
         return null;
       case 'SAAS_ADMIN':
         return (

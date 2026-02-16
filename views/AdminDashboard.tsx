@@ -32,14 +32,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   
   const [newWA, setNewWA] = useState(whatsappNumber);
 
-  // Estados locais para edição de categorias
   const [editingCategoryIdx, setEditingCategoryIdx] = useState<number | null>(null);
   const [categoryNameInput, setCategoryNameInput] = useState('');
   const [isAddingCategory, setIsAddingCategory] = useState(false);
 
   const stats = useMemo(() => {
     if (!orders) return { totalVendas: 0, totalPedidos: 0, ticketMedio: 0, bestSellers: [] };
-    const totalVendas = orders.reduce((acc, o) => o.status !== 'Cancelled' ? acc + (o.total || 0) : acc, 0);
+    const validOrders = orders.filter(o => o.status !== 'Cancelled');
+    const totalVendas = validOrders.reduce((acc, o) => acc + (o.total || 0), 0);
     const totalPedidos = orders.length;
     const ticketMedio = totalPedidos > 0 ? totalVendas / totalPedidos : 0;
     
@@ -58,7 +58,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [orders]);
 
   const activeOrders = useMemo(() => 
-    orders.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled')
+    (orders || []).filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled')
   , [orders]);
 
   const storeLink = `https://pedido-rapido.vercel.app/?s=${slug}`;
@@ -120,10 +120,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="space-y-6">
              <div className="flex justify-between items-end px-1">
                 <h3 className="text-xl font-black">Pedidos em Tempo Real</h3>
-                <span className="text-[10px] font-black uppercase text-primary bg-primary/10 px-2 py-1 rounded-full">{activeOrders.length} ativos</span>
+                <span className="text-[10px] font-black uppercase text-primary bg-primary/10 px-2 py-1 rounded-full">{(activeOrders || []).length} ativos</span>
              </div>
              
-             {activeOrders.length === 0 ? (
+             {(!activeOrders || activeOrders.length === 0) ? (
                <div className="flex flex-col items-center justify-center py-20 opacity-30 text-center">
                   <span className="material-symbols-outlined text-6xl mb-2">restaurant_menu</span>
                   <p className="font-bold">Nenhum pedido pendente</p>
@@ -138,16 +138,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <h4 className="font-black text-lg leading-tight">{order.customerName}</h4>
                             
                             {order.address && (
-                              <div className="bg-gray-50 dark:bg-black/20 p-2.5 rounded-xl border border-gray-100 dark:border-white/5 mt-1.5">
+                              <div className="bg-orange-50 dark:bg-orange-500/5 p-3 rounded-xl border border-orange-100 dark:border-orange-500/10 mt-2">
                                 <p className="text-[11px] font-bold text-[#9c7349] leading-tight flex items-start gap-1">
-                                  <span className="material-symbols-outlined text-sm">location_on</span>
+                                  <span className="material-symbols-outlined text-sm shrink-0">location_on</span>
                                   {order.address}
                                 </p>
                               </div>
                             )}
 
-                            <p className="text-[10px] text-primary font-black uppercase tracking-widest mt-2">
-                              {order.deliveryMethod === 'Delivery' ? '🛵 Para Entrega' : order.deliveryMethod === 'Pickup' ? '🥡 Para Retirada' : `🪑 Mesa ${order.tableNumber}`}
+                            <p className="text-[10px] text-primary font-black uppercase tracking-widest mt-2 flex items-center gap-1">
+                              {order.deliveryMethod === 'Delivery' ? '🛵 Entrega' : order.deliveryMethod === 'Pickup' ? '🥡 Retirada' : `🪑 Mesa ${order.tableNumber}`}
                             </p>
                          </div>
                          <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase shrink-0 ${
@@ -161,18 +161,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       {/* ITENS DO PEDIDO */}
                       <div className="space-y-2 border-t border-gray-100 dark:border-white/5 pt-3">
                          {order.items?.map((item, idx) => (
-                           <div key={idx} className="flex justify-between items-start text-sm">
-                             <span className="font-bold text-gray-700 dark:text-gray-200">{item.quantity}x {item.product?.name}</span>
-                             {item.notes && <span className="text-[10px] italic text-red-500 font-bold ml-2">Obs: {item.notes}</span>}
+                           <div key={idx} className="flex flex-col text-sm border-b border-gray-50 dark:border-white/5 pb-1 last:border-0">
+                             <div className="flex justify-between items-start">
+                               <span className="font-bold text-gray-700 dark:text-gray-200">{item.quantity}x {item.product?.name}</span>
+                             </div>
+                             {item.notes && <p className="text-[10px] italic text-red-500 font-black mt-0.5">↳ Obs item: {item.notes}</p>}
                            </div>
                          ))}
                       </div>
 
-                      {/* OBSERVAÇÕES GERAIS (DA TELA DO CARRINHO) */}
-                      {order.notes && (
-                        <div className="bg-yellow-50 dark:bg-yellow-500/5 p-3 rounded-xl border border-yellow-100 dark:border-yellow-500/10">
-                           <p className="text-[10px] font-black uppercase text-yellow-600 mb-1">Observações do Cliente:</p>
-                           <p className="text-xs font-medium italic text-gray-600 dark:text-gray-300">"{order.notes}"</p>
+                      {/* OBSERVAÇÕES GERAIS (IMPORTANT!) */}
+                      {order.notes && !order.notes.includes('🍔') && (
+                        <div className="bg-yellow-50 dark:bg-yellow-500/5 p-4 rounded-2xl border-l-4 border-yellow-400">
+                           <p className="text-[10px] font-black uppercase text-yellow-600 mb-1 flex items-center gap-1">
+                             <span className="material-symbols-outlined text-sm">info</span>
+                             Observações Gerais:
+                           </p>
+                           <p className="text-xs font-bold text-gray-800 dark:text-gray-100 italic leading-relaxed">
+                             "{order.notes}"
+                           </p>
                         </div>
                       )}
 
