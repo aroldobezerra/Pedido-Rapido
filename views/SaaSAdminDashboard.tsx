@@ -32,10 +32,30 @@ const SaaSAdminDashboard: React.FC<SaaSAdminDashboardProps> = ({
   const totalGlobalPedidos = stores.reduce((acc, s) => acc + (s.orders?.length || 0), 0);
 
   const handlePasswordChange = () => {
-    if (currentPass !== saasPassword) { alert("Senha mestre atual incorreta."); return; }
-    if (newPass !== confirmPass) { alert("As novas senhas não coincidem."); return; }
+    if (!currentPass || !newPass || !confirmPass) {
+      alert("Por favor, preencha todos os campos de senha.");
+      return;
+    }
+    if (currentPass !== saasPassword) { 
+      alert("Senha mestre atual incorreta."); 
+      return; 
+    }
+    if (newPass !== confirmPass) { 
+      alert("As novas senhas não coincidem."); 
+      return; 
+    }
+    if (newPass.length < 6) {
+      alert("A nova senha deve ter pelo menos 6 caracteres.");
+      return;
+    }
+    
     onUpdateSaaSPassword(newPass);
     alert("Senha mestre alterada com sucesso!");
+    
+    // Limpar campos
+    setCurrentPass('');
+    setNewPass('');
+    setConfirmPass('');
     setShowSettings(false);
   };
 
@@ -56,11 +76,26 @@ const SaaSAdminDashboard: React.FC<SaaSAdminDashboardProps> = ({
       <main className="max-w-5xl mx-auto w-full p-6 space-y-8">
         {showSettings && (
           <section className="bg-white dark:bg-white/5 p-6 rounded-[2rem] shadow-sm border border-primary/30 animate-in slide-in-from-top duration-300">
-            <h3 className="text-lg font-black mb-4">Segurança Master</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <input type="password" value={currentPass} onChange={(e) => setCurrentPass(e.target.value)} className="w-full bg-gray-50 dark:bg-white/5 border-none rounded-2xl p-4 text-sm" placeholder="Senha Mestre Atual" />
-              <input type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} className="w-full bg-gray-50 dark:bg-white/5 border-none rounded-2xl p-4 text-sm" placeholder="Nova Senha Mestre" />
-              <button onClick={handlePasswordChange} className="bg-primary text-white font-black px-6 rounded-2xl py-4 shadow-xl shadow-primary/20 active:scale-95 transition-all">Salvar Acesso Master</button>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-black">Segurança Master</h3>
+              <button onClick={() => setShowSettings(false)} className="text-gray-400"><span className="material-symbols-outlined">close</span></button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-gray-400 px-1">Senha Atual</label>
+                <input type="password" value={currentPass} onChange={(e) => setCurrentPass(e.target.value)} className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4 text-sm" placeholder="••••••" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-gray-400 px-1">Nova Senha</label>
+                <input type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4 text-sm" placeholder="Mín. 6 dígitos" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-gray-400 px-1">Confirmar Nova Senha</label>
+                <input type="password" value={confirmPass} onChange={(e) => setConfirmPass(e.target.value)} className="w-full bg-gray-50 dark:bg-black/20 border-none rounded-2xl p-4 text-sm" placeholder="Repita a nova senha" />
+              </div>
+              <button onClick={handlePasswordChange} className="bg-primary text-white font-black px-6 rounded-2xl py-4 shadow-xl shadow-primary/20 active:scale-95 transition-all w-full">
+                Salvar Acesso
+              </button>
             </div>
           </section>
         )}
