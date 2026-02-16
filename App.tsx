@@ -22,10 +22,33 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
   const [errorStatus, setErrorStatus] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   
   const [saasPassword, setSaasPassword] = useState(() => {
     return localStorage.getItem('saas_master_pass') || 'admin123';
   });
+
+  // Função central de sincronização com a Nuvem
+  const syncStoreToCloud = async (store: Store) => {
+    if (!isSupabaseConfigured()) return false;
+    try {
+      setIsSyncing(true);
+      const { error } = await supabase.from('stores').upsert({ 
+        id: store.id, 
+        slug: store.slug, 
+        content: store, 
+        updated_at: new Date() 
+      }, { onConflict: 'slug' });
+      
+      if (error) throw error;
+      return true;
+    } catch (e) {
+      console.error("Erro na sincronização:", e);
+      return false;
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Inicialização do App com foco em Roteamento de SaaS
   useEffect(() => {
@@ -36,7 +59,6 @@ const App: React.FC = () => {
       const urlParams = new URLSearchParams(window.location.search);
       const storeSlug = urlParams.get('s');
 
-      // 1. Carrega lojas locais (Contexto do Administrador/Dono)
       const savedStores = localStorage.getItem('saas_stores');
       let localStores: Store[] = [];
       if (savedStores) {
@@ -44,9 +66,8 @@ const App: React.FC = () => {
         setStores(localStores);
       }
       
-      // 2. Lógica de Roteamento autoritativa por Slug
       if (storeSlug) {
-        // Busca local primeiro para velocidade
+        // Busca local primeiro
         const foundLocal = localStores.find(s => s.slug === storeSlug);
         
         if (foundLocal) {
@@ -54,31 +75,28 @@ const App: React.FC = () => {
           setView('MENU');
           setIsLoading(false);
         } else {
-          // Se não estiver no localstorage, BUSCA OBRIGATÓRIA no Supabase
+          // Busca OBRIGATÓRIA no Supabase
           try {
             const { data, error } = await supabase
               .from('stores')
               .select('content')
               .eq('slug', storeSlug)
-              .maybeSingle(); // maybeSingle não lança erro se não encontrar
+              .maybeSingle();
             
             if (data && !error) {
               const remoteStore = data.content as Store;
               setCurrentStore(remoteStore);
               setView('MENU');
             } else {
-              // Se chegamos aqui, a loja realmente não existe
-              setErrorStatus(`A lanchonete "@${storeSlug}" não foi encontrada em nossa base.`);
+              setErrorStatus(`A lanchonete "@${storeSlug}" não foi encontrada em nossa base. Verifique se o link está correto.`);
             }
           } catch (e) {
-            console.error("Erro crítico de conexão:", e);
-            setErrorStatus("Erro ao conectar com o servidor. Verifique sua internet.");
+            setErrorStatus("Erro de conexão. Verifique sua internet.");
           } finally {
             setIsLoading(false);
           }
         }
       } else {
-        // Sem slug na URL, mostra a Landing Page normal
         setIsLoading(false);
       }
     };
@@ -86,25 +104,9 @@ const App: React.FC = () => {
     initApp();
   }, []);
 
-  // Persistência e Sincronização
+  // Persistência local (rápida)
   useEffect(() => {
     localStorage.setItem('saas_stores', JSON.stringify(stores));
-    
-    if (isSupabaseConfigured() && stores.length > 0) {
-      const sync = async () => {
-        for (const store of stores) {
-          try {
-            await supabase.from('stores').upsert({ 
-              id: store.id, 
-              slug: store.slug, 
-              content: store, 
-              updated_at: new Date() 
-            }, { onConflict: 'slug' });
-          } catch (e) { console.warn("Erro de sincronização em background", e); }
-        }
-      };
-      sync();
-    }
   }, [stores]);
 
   useEffect(() => {
@@ -156,6 +158,7 @@ const App: React.FC = () => {
     const updatedStore = { ...currentStore, orders: [...(currentStore.orders || []), newOrder] };
     setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     setCurrentStore(updatedStore);
+    syncStoreToCloud(updatedStore); // Sincroniza pedido novo
     setActiveOrder(newOrder);
     setCart([]);
     setView('TRACK');
@@ -173,9 +176,10 @@ const App: React.FC = () => {
     const updatedStore = { ...currentStore, orders: updatedOrders };
     setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     setCurrentStore(updatedStore);
+    await syncStoreToCloud(updatedStore);
   };
 
-  const handleSaveProduct = (product: Product) => {
+  const handleSaveProduct = async (product: Product) => {
     if (!currentStore) return;
     let updatedProducts;
     if (product.id === 'new') {
@@ -188,23 +192,30 @@ const App: React.FC = () => {
     setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     setCurrentStore(updatedStore);
     setView('ADMIN');
+    await syncStoreToCloud(updatedStore);
   };
 
-  const handleDeleteProduct = (productId: string) => {
+  const handleDeleteProduct = async (productId: string) => {
     if (!currentStore) return;
     const updatedProducts = (currentStore.products || []).filter(p => p.id !== productId);
     const updatedStore = { ...currentStore, products: updatedProducts };
     setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     setCurrentStore(updatedStore);
+    await syncStoreToCloud(updatedStore);
   };
 
-  const handleRegisterStore = (store: Store) => {
-    setStores(prev => [...prev, store]);
-    setCurrentStore(store);
-    setView('ADMIN');
+  const handleRegisterStore = async (store: Store) => {
+    const success = await syncStoreToCloud(store);
+    if (success) {
+      setStores(prev => [...prev, store]);
+      setCurrentStore(store);
+      setView('ADMIN');
+    } else {
+      alert("Erro ao salvar na nuvem. Verifique sua conexão e tente novamente.");
+    }
   };
 
-  const handleUpdateStoreSettings = (settings: any) => {
+  const handleUpdateStoreSettings = async (settings: any) => {
     if (!currentStore) return;
     let updatedStore = { ...currentStore, ...settings };
     if (settings._categoryAdd) {
@@ -214,6 +225,7 @@ const App: React.FC = () => {
     }
     setStores(prev => prev.map(s => s.id === currentStore.id ? updatedStore : s));
     setCurrentStore(updatedStore);
+    await syncStoreToCloud(updatedStore);
   };
 
   const handleAdminLogin = () => {
@@ -225,7 +237,6 @@ const App: React.FC = () => {
     }
   };
 
-  // TELA DE LOADING E ERROS 404
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark">
@@ -237,7 +248,7 @@ const App: React.FC = () => {
 
   if (errorStatus) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-8 text-center">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-8 text-center animate-in fade-in duration-500">
         <div className="size-24 bg-red-500/10 text-red-500 rounded-[2.5rem] flex items-center justify-center mb-6">
           <span className="material-symbols-outlined text-5xl">error_outline</span>
         </div>
@@ -356,6 +367,8 @@ const App: React.FC = () => {
             }}
             onBack={() => setView('MENU')}
             onUpdatePassword={(p) => handleUpdateStoreSettings({ adminPassword: p })}
+            onManualSync={() => syncStoreToCloud(currentStore)}
+            isSyncing={isSyncing}
           />
         );
       case 'PRODUCT_FORM':

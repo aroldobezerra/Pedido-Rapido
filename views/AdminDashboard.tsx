@@ -20,11 +20,13 @@ interface AdminDashboardProps {
   onToggleAvailability: (id: string) => void;
   onBack: () => void;
   onUpdatePassword: (p: string) => void;
+  onManualSync?: () => void;
+  isSyncing?: boolean;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
   slug, whatsappNumber, isOpen, orders = [], onToggleStoreStatus, onUpdateStoreSettings, onUpdateOrderStatus,
-  products = [], categories = [], onAddProduct, onEditProduct, onDeleteProduct, onBack
+  products = [], categories = [], onAddProduct, onEditProduct, onDeleteProduct, onBack, onManualSync, isSyncing
 }) => {
   const [activeTab, setActiveTab] = useState<'KITCHEN' | 'PRODUCTS' | 'STATS' | 'SETTINGS'>('KITCHEN');
   const [copied, setCopied] = useState(false);
@@ -61,7 +63,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     (orders || []).filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled')
   , [orders]);
 
-  const storeLink = `https://pedido-rapido.vercel.app/?s=${slug}`;
+  const storeLink = `${window.location.origin}/?s=${slug}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(storeLink);
@@ -99,8 +101,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <span className="material-symbols-outlined">arrow_back</span>
           <span className="text-xs font-bold uppercase tracking-widest">Sair</span>
         </button>
-        <h2 className="text-sm font-black uppercase tracking-widest">Painel de Gestão</h2>
-        <div className="size-8"></div>
+        <div className="flex flex-col items-center">
+           <h2 className="text-sm font-black uppercase tracking-widest">Painel de Gestão</h2>
+           <div className="flex items-center gap-1">
+              <span className={`size-1.5 rounded-full ${isSyncing ? 'bg-blue-500 animate-ping' : 'bg-green-500'}`}></span>
+              <span className="text-[8px] font-black text-gray-400 uppercase tracking-tighter">{isSyncing ? 'Sincronizando...' : 'Nuvem Conectada'}</span>
+           </div>
+        </div>
+        <button onClick={onManualSync} className={`p-2 rounded-full ${isSyncing ? 'animate-spin text-blue-500' : 'text-gray-400 hover:text-primary'}`}>
+          <span className="material-symbols-outlined text-xl">sync</span>
+        </button>
       </header>
 
       <nav className="flex bg-white dark:bg-background-dark px-4 py-2 gap-2 border-b border-gray-100 dark:border-white/10 sticky top-[60px] z-30 overflow-x-auto hide-scrollbar">
@@ -158,7 +168,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                          </div>
                       </div>
 
-                      {/* ITENS DO PEDIDO */}
                       <div className="space-y-2 border-t border-gray-100 dark:border-white/5 pt-3">
                          {order.items?.map((item, idx) => (
                            <div key={idx} className="flex flex-col text-sm border-b border-gray-50 dark:border-white/5 pb-1 last:border-0">
@@ -170,7 +179,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                          ))}
                       </div>
 
-                      {/* OBSERVAÇÕES GERAIS (IMPORTANT!) */}
                       {order.notes && !order.notes.includes('🍔') && (
                         <div className="bg-yellow-50 dark:bg-yellow-500/5 p-4 rounded-2xl border-l-4 border-yellow-400">
                            <p className="text-[10px] font-black uppercase text-yellow-600 mb-1 flex items-center gap-1">
@@ -183,7 +191,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
                       )}
 
-                      {/* BOTÃO SEQUENCIAL COM FEEDBACK */}
                       <div className="flex gap-2 pt-2">
                         {order.status === 'Received' && (
                           <button 
@@ -245,6 +252,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="material-symbols-outlined text-sm">{copied ? 'check' : 'content_copy'}</span>
                 {copied ? 'Link Copiado!' : 'Copiar Link p/ WhatsApp'}
               </button>
+              <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest text-center italic">Compartilhe este link com seus clientes</p>
             </div>
 
             <div className={`p-6 rounded-3xl border transition-all ${isOpen ? 'bg-green-50 border-green-100 dark:bg-green-500/5' : 'bg-red-50 border-red-100 dark:bg-red-500/5'}`}>
