@@ -28,32 +28,39 @@ const App: React.FC = () => {
     return localStorage.getItem('saas_master_pass') || 'admin123';
   });
 
+  /**
+   * Sincronização Inteligente: Adapta-se às colunas existentes no banco.
+   */
   const syncStoreToCloud = async (store: Store) => {
     if (!isSupabaseConfigured()) return false;
     try {
       setIsSyncing(true);
       
-      // Upsert robusto: tenta salvar tudo no JSONB 'content' mas garante as colunas de busca (id, slug)
-      const { error } = await supabase.from('stores').upsert({
+      // Criamos um payload que tenta agradar qualquer estrutura de tabela
+      const payload: any = {
         id: store.id,
         slug: store.slug,
         name: store.name,
-        content: store 
-      }, { onConflict: 'slug' });
+        whatsapp: store.whatsapp,
+        content: store // Tenta salvar o JSON completo
+      };
+
+      const { error } = await supabase.from('stores').upsert(payload, { onConflict: 'slug' });
       
       if (error) {
-        console.warn("Erro ao salvar coluna 'content', tentando modo compatibilidade:", error.message);
-        // Fallback: se a coluna content não existir, salva o básico para o link não quebrar
-        const { error: error2 } = await supabase.from('stores').upsert({
-          id: store.id,
-          slug: store.slug,
-          name: store.name
-        }, { onConflict: 'slug' });
-        if (error2) throw error2;
+        // Se der erro de coluna (42703), tentamos salvar sem a coluna 'content'
+        if (error.code === '42703') {
+          console.warn("Coluna 'content' não encontrada. Salvando em modo reduzido.");
+          const { content, ...flatPayload } = payload;
+          const { error: retryError } = await supabase.from('stores').upsert(flatPayload, { onConflict: 'slug' });
+          if (retryError) throw retryError;
+        } else {
+          throw error;
+        }
       }
       return true;
     } catch (e) {
-      console.error("Falha crítica na nuvem:", e);
+      console.error("Erro na sincronização Cloud:", e);
       return false;
     } finally {
       setIsSyncing(false);
@@ -68,30 +75,30 @@ const App: React.FC = () => {
       const urlParams = new URLSearchParams(window.location.search);
       const rawSlug = urlParams.get('s');
       
-      // Carrega cache local primeiro para velocidade e redundância
+      // Carregar cache local primeiro para resiliência máxima
       const savedStores = localStorage.getItem('saas_stores');
       let localStores: Store[] = [];
       if (savedStores) {
         try {
           localStores = JSON.parse(savedStores);
           setStores(localStores);
-        } catch (e) { console.error("Erro cache local"); }
+        } catch (e) { console.error("Falha ao ler cache local"); }
       }
       
       if (rawSlug) {
         const storeSlug = sanitizeSlug(rawSlug);
         
-        // 1. Prioridade para Cache Local (Se o dono estiver acessando, funciona sempre)
+        // 1. Tenta encontrar localmente primeiro (Resposta instantânea para o dono)
         const foundLocal = localStores.find(s => s.slug === storeSlug || sanitizeSlug(s.name) === storeSlug);
         
         if (foundLocal) {
           setCurrentStore(foundLocal);
           setView('MENU');
           setIsLoading(false);
-          // Tenta atualizar em background sem bloquear
+          // Sincroniza em background
           fetchRemoteStore(storeSlug);
         } else {
-          // 2. Busca na Nuvem - Se não tem cache, busca no banco
+          // 2. Se não tem local, busca obrigatoriamente na nuvem
           await fetchRemoteStore(storeSlug, true);
         }
       } else {
@@ -101,25 +108,24 @@ const App: React.FC = () => {
 
     const fetchRemoteStore = async (slug: string, isInitial: boolean = false) => {
       try {
-        // Busca com '*' para não errar nomes de colunas
         const { data, error } = await supabase
           .from('stores')
           .select('*')
-          .ilike('slug', slug) 
+          .ilike('slug', slug) // Busca Case Insensitive
           .maybeSingle();
 
         if (error) {
-          console.error("Erro Supabase:", error);
-          if (isInitial) setErrorStatus(`Erro técnico (Cód: ${error.code}). Estamos verificando o servidor.`);
+          console.error("Erro Supabase Fetch:", error);
+          if (isInitial) setErrorStatus(`Erro na rede (Cód: ${error.code}). Tente recarregar.`);
           return;
         }
 
         if (data) {
-          // Mapeador Inteligente: Constrói a loja do que estiver disponível no banco
+          // Reconstrói a Store idependente de como os dados estão guardados
           const mappedStore: Store = data.content || {
             id: data.id,
             slug: data.slug,
-            name: data.name || 'Sua Lanchonete',
+            name: data.name || 'Lanchonete',
             whatsapp: data.whatsapp || '',
             adminPassword: data.admin_password || data.adminPassword || '',
             products: data.products || [],
@@ -132,17 +138,17 @@ const App: React.FC = () => {
           setCurrentStore(mappedStore);
           if (isInitial) setView('MENU');
           
-          // Atualiza lista de lojas
+          // Atualiza lista local
           setStores(prev => {
             const exists = prev.find(s => s.id === mappedStore.id);
             if (exists) return prev.map(s => s.id === mappedStore.id ? mappedStore : s);
             return [...prev, mappedStore];
           });
         } else if (isInitial) {
-          setErrorStatus(`A lanchonete "@${slug}" não foi encontrada. Verifique se o link está correto.`);
+          setErrorStatus(`A lanchonete "@${slug}" não foi encontrada no servidor central. Se você acabou de criar, aguarde alguns segundos.`);
         }
       } catch (e) {
-        if (isInitial) setErrorStatus("Conexão instável. Tente recarregar a página.");
+        if (isInitial) setErrorStatus("Não foi possível conectar ao servidor. Verifique sua internet.");
       } finally {
         if (isInitial) setIsLoading(false);
       }
@@ -214,7 +220,7 @@ const App: React.FC = () => {
     setView('ADMIN');
     
     if (!success) {
-      alert("Loja criada localmente! O link online será ativado automaticamente assim que a sincronização completar.");
+      alert("Aviso: Cardápio criado com sucesso no seu dispositivo! O link online pode demorar alguns minutos para ativar devido a uma instabilidade no banco de dados.");
     }
   };
 
@@ -239,7 +245,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-6">
         <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="font-black text-[10px] uppercase tracking-[0.3em] text-primary">Carregando Cardápio...</p>
+        <p className="font-black text-[10px] uppercase tracking-[0.3em] text-primary">Sincronizando Cardápio...</p>
       </div>
     );
   }
@@ -247,8 +253,8 @@ const App: React.FC = () => {
   if (errorStatus) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background-light dark:bg-background-dark p-8 text-center animate-in fade-in duration-700">
-        <div className="size-24 bg-red-500/10 text-red-500 rounded-[2.5rem] flex items-center justify-center mb-8 shadow-2xl shadow-red-500/5">
-          <span className="material-symbols-outlined text-5xl">error</span>
+        <div className="size-24 bg-red-500/10 text-red-500 rounded-[2.5rem] flex items-center justify-center mb-8 shadow-2xl">
+          <span className="material-symbols-outlined text-5xl">link_off</span>
         </div>
         <h2 className="text-3xl font-black mb-3 tracking-tighter">Ops! Link Não Ativado</h2>
         <p className="text-gray-500 text-sm mb-10 max-w-xs leading-relaxed">{errorStatus}</p>
@@ -257,7 +263,7 @@ const App: React.FC = () => {
             onClick={() => { window.location.href = window.location.origin; }} 
             className="bg-primary text-white font-black px-10 py-5 rounded-2xl shadow-xl shadow-primary/30 active:scale-95 transition-all text-sm uppercase tracking-widest"
           >
-            Ir para o Início
+            Página Inicial
           </button>
           <button 
             onClick={() => window.location.reload()}
@@ -279,7 +285,7 @@ const App: React.FC = () => {
       case 'SAAS_LOGIN':
         const masterPass = prompt("Senha Mestre:");
         if (masterPass === saasPassword) setView('SAAS_ADMIN');
-        else if (masterPass !== null) { alert("Senha mestre inválida."); setView('HOME'); }
+        else if (masterPass !== null) { alert("Acesso Negado."); setView('HOME'); }
         else setView('HOME');
         return null;
       case 'SAAS_ADMIN':
@@ -298,18 +304,18 @@ const App: React.FC = () => {
         return (
           <div className="flex flex-col items-center justify-center h-screen p-8 bg-background-light dark:bg-background-dark">
             <div className="w-full max-w-sm flex flex-col items-center space-y-8 text-center animate-in zoom-in duration-300">
-              <h2 className="text-2xl font-black">Área do Lojista</h2>
+              <h2 className="text-2xl font-black">Acesso Lojista</h2>
               <input 
                 type="password" 
                 value={adminPasswordInput}
                 onChange={(e) => setAdminPasswordInput(e.target.value)}
-                placeholder="Senha de Acesso" 
+                placeholder="Senha da Unidade" 
                 className="w-full p-5 rounded-2xl border-2 border-gray-100 dark:border-white/5 bg-white dark:bg-white/5 text-center font-bold tracking-[0.5em]"
                 onKeyDown={(e) => { if (e.key === 'Enter') handleAdminLogin(); }}
                 autoFocus
               />
               <button onClick={handleAdminLogin} className="w-full bg-primary text-white font-black py-5 rounded-2xl shadow-lg">Entrar no Painel</button>
-              <button onClick={() => setView('MENU')} className="text-gray-400 text-xs font-black uppercase">Voltar ao Cardápio</button>
+              <button onClick={() => setView('MENU')} className="text-gray-400 text-xs font-black uppercase tracking-widest">Voltar</button>
             </div>
           </div>
         );

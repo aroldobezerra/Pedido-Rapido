@@ -72,6 +72,7 @@ export type AppView = 'HOME' | 'REGISTER' | 'MENU' | 'CART' | 'REVIEW' | 'TRACK'
  * com o que está gravado no banco de dados.
  */
 export const sanitizeSlug = (text: string): string => {
+  if (!text) return '';
   return text
     .toLowerCase()
     .normalize('NFD')
