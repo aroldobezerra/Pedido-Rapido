@@ -251,7 +251,10 @@ const PedidoRapido = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-100 to-red-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8">
-          <button onClick={() => setView('home')} className="mb-6 flex items-center gap-2 text-gray-600 hover:text-orange-500 transition">
+          <button 
+            onClick={() => setView('home')} 
+            className="mb-6 flex items-center gap-2 text-gray-600 hover:text-orange-500 transition"
+          >
             <ArrowLeft size={20} /> Voltar
           </button>
           <div className="text-center mb-8">
@@ -287,7 +290,10 @@ const PedidoRapido = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-green-100 to-blue-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8">
-          <button onClick={() => setView('home')} className="mb-6 flex items-center gap-2 text-gray-600 hover:text-green-500 transition">
+          <button 
+            onClick={() => setView('home')} 
+            className="mb-6 flex items-center gap-2 text-gray-600 hover:text-green-500 transition"
+          >
             <ArrowLeft size={20} /> Voltar
           </button>
           <div className="text-center mb-8">
@@ -375,7 +381,10 @@ const PedidoRapido = () => {
               </div>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => setView('cart')} className="bg-orange-600 hover:bg-orange-700 p-3 rounded-lg relative transition">
+              <button 
+                onClick={() => setView('cart')} 
+                className="bg-orange-600 hover:bg-orange-700 p-3 rounded-lg relative transition"
+              >
                 <ShoppingCart size={20} />
                 {cart.length > 0 && (
                   <span className="absolute -top-2 -right-2 bg-yellow-400 text-orange-900 text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
@@ -383,7 +392,10 @@ const PedidoRapido = () => {
                   </span>
                 )}
               </button>
-              <button onClick={() => setView('admin-login')} className="bg-orange-600 hover:bg-orange-700 p-3 rounded-lg transition">
+              <button 
+                onClick={() => setView('admin-login')} 
+                className="bg-orange-600 hover:bg-orange-700 p-3 rounded-lg transition"
+              >
                 <Lock size={20} />
               </button>
             </div>
@@ -407,9 +419,9 @@ const PedidoRapido = () => {
                       onClick={() => {
                         const ex = cart.find(i => i.id === p.id);
                         if (ex) {
-                          setCart(cart.map(i => i.id === p.id ? {...i, qty: i.qty + 1} : i));
+                          setCart(cart.map(i => i.id === p.id ? { ...i, qty: i.qty + 1 } : i));
                         } else {
-                          setCart([...cart, {...p, qty: 1}]);
+                          setCart([...cart, { ...p, qty: 1 }]);
                         }
                       }}
                       className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition"
@@ -437,7 +449,10 @@ const PedidoRapido = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50">
         <header className="bg-gradient-to-r from-orange-500 to-red-500 text-white p-4 shadow-lg">
-          <button onClick={() => setView('menu')} className="flex items-center gap-2 mb-2 hover:opacity-80 transition">
+          <button 
+            onClick={() => setView('menu')} 
+            className="flex items-center gap-2 mb-2 hover:opacity-80 transition"
+          >
             <ArrowLeft size={20} /> Voltar ao Cardápio
           </button>
           <h1 className="text-3xl font-bold">Seu Carrinho</h1>
@@ -459,14 +474,23 @@ const PedidoRapido = () => {
                       <p className="text-orange-500">R$ {parseFloat(item.price).toFixed(2)}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => setCart(cart.map(i => i.id === item.id ? {...i, qty: Math.max(1, i.qty - 1)} : i))} className="bg-gray-200 hover:bg-gray-300 p-2 rounded-lg transition">
+                      <button 
+                        onClick={() => setCart(cart.map(i => i.id === item.id ? { ...i, qty: Math.max(1, i.qty - 1) } : i))} 
+                        className="bg-gray-200 hover:bg-gray-300 p-2 rounded-lg transition"
+                      >
                         <Minus size={16} />
                       </button>
                       <span className="font-bold w-8 text-center">{item.qty}</span>
-                      <button onClick={() => setCart(cart.map(i => i.id === item.id ? {...i, qty: i.qty + 1} : i))} className="bg-orange-500 hover:bg-orange-600 text-white p-2 rounded-lg transition">
+                      <button 
+                        onClick={() => setCart(cart.map(i => i.id === item.id ? { ...i, qty: i.qty + 1 } : i))} 
+                        className="bg-orange-500 hover:bg-orange-600 text-white p-2 rounded-lg transition"
+                      >
                         <Plus size={16} />
                       </button>
-                      <button onClick={() => setCart(cart.filter(i => i.id !== item.id))} className="bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg ml-2 transition">
+                      <button 
+                        onClick={() => setCart(cart.filter(i => i.id !== item.id))} 
+                        className="bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg ml-2 transition"
+                      >
                         <Trash2 size={16} />
                       </button>
                     </div>
@@ -474,12 +498,36 @@ const PedidoRapido = () => {
                 ))}
               </div>
               <div className="bg-white rounded-2xl shadow-lg p-6">
-                <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Seu nome" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl mb-4 outline-none transition" />
+                <input 
+                  type="text" 
+                  value={name} 
+                  onChange={(e) => setName(e.target.value)} 
+                  placeholder="Seu nome" 
+                  className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl mb-4 outline-none transition" 
+                />
                 <div className="flex gap-3 mb-4">
-                  <button onClick={() => setOrderType('local')} className={`flex-1 py-3 rounded-xl font-semibold transition ${orderType === 'local' ? 'bg-orange-500 text-white' : 'bg-gray-200'}`}>Local</button>
-                  <button onClick={() => setOrderType('viagem')} className={`flex-1 py-3 rounded-xl font-semibold transition ${orderType === 'viagem' ? 'bg-orange-500 text-white' : 'bg-gray-200'}`}>Viagem</button>
+                  <button 
+                    onClick={() => setOrderType('local')} 
+                    className={`flex-1 py-3 rounded-xl font-semibold transition ${orderType === 'local' ? 'bg-orange-500 text-white' : 'bg-gray-200'}`}
+                  >
+                    Local
+                  </button>
+                  <button 
+                    onClick={() => setOrderType('viagem')} 
+                    className={`flex-1 py-3 rounded-xl font-semibold transition ${orderType === 'viagem' ? 'bg-orange-500 text-white' : 'bg-gray-200'}`}
+                  >
+                    Viagem
+                  </button>
                 </div>
-                {orderType === 'local' && <input type="text" value={tableNumber} onChange={(e) => setTableNumber(e.target.value)} placeholder="Número da mesa" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl outline-none transition" />}
+                {orderType === 'local' && (
+                  <input 
+                    type="text" 
+                    value={tableNumber} 
+                    onChange={(e) => setTableNumber(e.target.value)} 
+                    placeholder="Número da mesa" 
+                    className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl outline-none transition" 
+                  />
+                )}
               </div>
               <div className="bg-white rounded-2xl shadow-lg p-6">
                 <div className="flex justify-between items-center mb-4">
@@ -518,19 +566,22 @@ const PedidoRapido = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8">
-          <button onClick(() => setView('menu')} className="mb-6 flex items-center gap-2 text-gray-600 hover:text-purple-500 transition">
+          <button
+            onClick={() => setView('menu')}
+            className="mb-6 flex items-center gap-2 text-gray-600 hover:text-purple-500 transition"
+          >
             <ArrowLeft size={20} /> Voltar
           </button>
           <div className="text-center mb-8">
             <Lock className="w-16 h-16 text-purple-500 mx-auto mb-4" />
             <h2 className="text-3xl font-bold">Área Admin</h2>
           </div>
-          <input 
-            type="password" 
-            value={pass} 
-            onChange={(e) => setPass(e.target.value)} 
-            placeholder="Senha de administrador" 
-            className="w-full px-4 py-3 border-2 border-gray-300 focus:border-purple-500 rounded-xl mb-4 outline-none transition" 
+          <input
+            type="password"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            placeholder="Senha de administrador"
+            className="w-full px-4 py-3 border-2 border-gray-300 focus:border-purple-500 rounded-xl mb-4 outline-none transition"
           />
           <button
             onClick={() => {
@@ -558,7 +609,12 @@ const PedidoRapido = () => {
         <div className="max-w-4xl mx-auto">
           <div className="flex justify-between items-center mb-8">
             <h1 className="text-4xl font-bold text-gray-800">Painel Admin</h1>
-            <button onClick={() => setView('menu')} className="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded-lg transition">Sair</button>
+            <button 
+              onClick={() => setView('menu')} 
+              className="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded-lg transition"
+            >
+              Sair
+            </button>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -579,17 +635,17 @@ const PedidoRapido = () => {
           <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
             <h3 className="text-xl font-bold text-gray-800 mb-4">WhatsApp</h3>
             <div className="flex gap-2">
-              <input 
-                type="text" 
-                value={whatsappEdit} 
-                onChange={(e) => setWhatsappEdit(e.target.value.replace(/[^0-9]/g, ''))} 
-                placeholder="5585999999999" 
-                className="flex-1 px-4 py-2 border-2 border-gray-300 focus:border-purple-500 rounded-lg outline-none transition" 
+              <input
+                type="text"
+                value={whatsappEdit}
+                onChange={(e) => setWhatsappEdit(e.target.value.replace(/[^0-9]/g, ''))}
+                placeholder="5585999999999"
+                className="flex-1 px-4 py-2 border-2 border-gray-300 focus:border-purple-500 rounded-lg outline-none transition"
               />
               <button
                 onClick={async () => {
                   await updateTenant(currentTenant.id, { whatsapp: whatsappEdit });
-                  setCurrentTenant({...currentTenant, whatsapp: whatsappEdit});
+                  setCurrentTenant({ ...currentTenant, whatsapp: whatsappEdit });
                   alert('✅ WhatsApp atualizado!');
                 }}
                 className="bg-purple-500 hover:bg-purple-600 text-white px-6 py-2 rounded-lg transition"
@@ -615,7 +671,7 @@ const PedidoRapido = () => {
                     onClick={async () => {
                       const newAvail = !p.available;
                       await updateProduct(p.id, { available: newAvail });
-                      setProducts(products.map(pr => pr.id === p.id ? {...pr, available: newAvail} : pr));
+                      setProducts(products.map(pr => pr.id === p.id ? { ...pr, available: newAvail } : pr));
                     }}
                     className={`px-4 py-2 rounded-lg font-semibold transition ${p.available ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
                   >
