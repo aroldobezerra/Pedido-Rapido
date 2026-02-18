@@ -517,6 +517,8 @@ const PedidoRapido = () => {
   if (view === 'admin-login') return <AdminLoginPage />;
   if (view === 'admin') return <AdminPage />;
   return null;
+  
+  <button onClick={() => setView('menu')}
 };
 
 export default PedidoRapido;
