@@ -30,9 +30,9 @@ const PedidoRapido = () => {
     }
   }, []);
 
-  const fetchAPI = async (table, params = {}) => {
+  const fetchAPI = async (table: string, params: any = {}) => {
     let url = `${SUPABASE_URL}/rest/v1/${table}`;
-    const queryParams = [];
+    const queryParams: string[] = [];
 
     if (params.select) queryParams.push(`select=${params.select}`);
     if (params.eq) queryParams.push(`${params.eq.column}=eq.${params.eq.value}`);
