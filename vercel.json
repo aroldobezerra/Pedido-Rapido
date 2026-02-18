@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/:tenant",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/:tenant/:path*",
+      "destination": "/index.html"
+    }
+  ]
+}
