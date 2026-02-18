@@ -11,6 +11,23 @@ const PedidoRapido = () => {
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
   const [loading, setLoading] = useState(false);
+  // Adicione este useEffect logo após os useState no início de PedidoRapido
+useEffect(() => {
+  const params = new URLSearchParams(window.location.search);
+  const slugParam = params.get('s');
+  if (slugParam) {
+    (async () => {
+      const tenant = await getTenant(slugParam);
+      if (tenant) {
+        setCurrentTenant(tenant);
+        setProducts(await getProducts(tenant.id));
+        setView('menu');
+      } else {
+        setView('not-found'); // ou 'home' se não tiver tela de erro
+      }
+    })();
+  }
+}, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchAPI = async (table, params = {}) => {
     let url = `${SUPABASE_URL}/rest/v1/${table}`;
