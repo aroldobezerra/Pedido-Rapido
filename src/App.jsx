@@ -2,17 +2,57 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Send, Lock, ArrowLeft, Store, Loader,
   Zap, Shield, Eye, EyeOff, Trash, Phone, Calendar, Key, ChevronRight,
-  Package, BarChart2, Users, CheckCircle, XCircle, AlertTriangle, RefreshCw,
-  Database
+  Package, BarChart2, Users, CheckCircle, XCircle, AlertTriangle, RefreshCw
 } from 'lucide-react';
 
 const SUPABASE_URL  = (import.meta.env.VITE_SUPABASE_URL  || '').replace(/\/$/, '');
 const SUPABASE_KEY  = import.meta.env.VITE_SUPABASE_KEY  || '';
 const SAAS_PASSWORD = import.meta.env.VITE_SAAS_PASSWORD || 'master123';
 
-// ─── API BASE ────────────────────────────────────────────────────────────────
+// ─── SCHEMA REAL DO BANCO ────────────────────────────────────────────────────
+// Baseado na tabela products do Supabase:
+// products: id, store_id, name, price, category, description, image, extras, is_available, track_inventory, created_at
+// tenants:  id, name, slug, whatsapp, password, plan, created_at
+// orders:   tenant_id (ou store_id), customer_name, order_type, table_number, items, total, status
 
-const baseHeaders = (extra = {}) => ({
+const DB = {
+  tenants: {
+    table:     'tenants',
+    id:        'id',
+    name:      'name',
+    slug:      'slug',
+    whatsapp:  'whatsapp',
+    password:  'password',
+    plan:      'plan',
+    createdAt: 'created_at',
+  },
+  products: {
+    table:      'products',
+    id:         'id',
+    storeId:    'store_id',      // FK para tenants.id
+    name:       'name',
+    price:      'price',
+    category:   'category',
+    description:'description',
+    image:      'image',
+    available:  'is_available',  // nome real da coluna
+    createdAt:  'created_at',
+  },
+  orders: {
+    table:      'orders',
+    storeId:    'store_id',      // tente 'store_id'; se falhar, mude para 'tenant_id'
+    customer:   'customer_name',
+    type:       'order_type',
+    table_num:  'table_number',
+    items:      'items',
+    total:      'total',
+    status:     'status',
+  },
+};
+
+// ─── API HELPERS ─────────────────────────────────────────────────────────────
+
+const hdrs = (extra = {}) => ({
   'apikey': SUPABASE_KEY,
   'Authorization': `Bearer ${SUPABASE_KEY}`,
   'Content-Type': 'application/json',
@@ -22,11 +62,11 @@ const baseHeaders = (extra = {}) => ({
 const apiFetch = async (table, params = {}) => {
   const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
   if (params.select) url.searchParams.set('select', params.select);
-  if (params.eq)     url.searchParams.set(params.eq.column, `eq.${params.eq.value}`);
+  if (params.eq)     url.searchParams.set(params.eq.col, `eq.${params.eq.val}`);
   if (params.limit)  url.searchParams.set('limit', String(params.limit));
-  if (params.order)  url.searchParams.set('order', `${params.order.column}.${params.order.ascending ? 'asc' : 'desc'}`);
+  if (params.order)  url.searchParams.set('order', `${params.order.col}.${params.order.asc ? 'asc' : 'desc'}`);
 
-  const res  = await fetch(url.toString(), { headers: baseHeaders() });
+  const res  = await fetch(url.toString(), { headers: hdrs() });
   const json = await res.json();
   if (!res.ok) throw new Error(json?.message || json?.hint || JSON.stringify(json));
   return Array.isArray(json) ? json : [];
@@ -35,7 +75,7 @@ const apiFetch = async (table, params = {}) => {
 const apiInsert = async (table, row) => {
   const res  = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
     method: 'POST',
-    headers: baseHeaders({ 'Prefer': 'return=representation' }),
+    headers: hdrs({ 'Prefer': 'return=representation' }),
     body: JSON.stringify(row),
   });
   const json = await res.json();
@@ -43,10 +83,10 @@ const apiInsert = async (table, row) => {
   return Array.isArray(json) ? json[0] : json;
 };
 
-const apiUpdate = async (table, column, value, data) => {
+const apiUpdate = async (table, col, val, data) => {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/${table}?${column}=eq.${encodeURIComponent(value)}`,
-    { method: 'PATCH', headers: baseHeaders(), body: JSON.stringify(data) }
+    `${SUPABASE_URL}/rest/v1/${table}?${col}=eq.${encodeURIComponent(val)}`,
+    { method: 'PATCH', headers: hdrs(), body: JSON.stringify(data) }
   );
   if (!res.ok) {
     const json = await res.json().catch(() => ({}));
@@ -55,25 +95,14 @@ const apiUpdate = async (table, column, value, data) => {
   return true;
 };
 
-const apiDelete = async (table, column, value) => {
+const apiDelete = async (table, col, val) => {
   await fetch(
-    `${SUPABASE_URL}/rest/v1/${table}?${column}=eq.${encodeURIComponent(value)}`,
-    { method: 'DELETE', headers: baseHeaders() }
+    `${SUPABASE_URL}/rest/v1/${table}?${col}=eq.${encodeURIComponent(val)}`,
+    { method: 'DELETE', headers: hdrs() }
   );
 };
 
-// ── Descobre colunas reais de uma tabela via Supabase REST (HEAD + select *) ──
-const discoverColumns = async (table) => {
-  try {
-    const res  = await fetch(`${SUPABASE_URL}/rest/v1/${table}?limit=1`, { headers: baseHeaders() });
-    const json = await res.json();
-    if (Array.isArray(json) && json.length > 0) return Object.keys(json[0]);
-    // Tenta OPTIONS para pegar definição
-    return [];
-  } catch { return []; }
-};
-
-// ─── COMPONENTES UI ──────────────────────────────────────────────────────────
+// ─── UI HELPERS ───────────────────────────────────────────────────────────────
 
 const Spinner = ({ size = 28, color = 'text-orange-500' }) => (
   <Loader className={`animate-spin ${color}`} size={size} />
@@ -90,87 +119,13 @@ const LoadingOverlay = ({ text = 'Carregando...' }) => (
 
 const Toast = ({ msg, type = 'success', onClose }) => {
   useEffect(() => { const t = setTimeout(onClose, 4500); return () => clearTimeout(t); }, [onClose]);
-  const bg   = { success: 'bg-green-500', error: 'bg-red-500', info: 'bg-blue-500' }[type];
-  const Icon = { success: CheckCircle,    error: XCircle,      info: AlertTriangle  }[type];
+  const bg   = { success: 'bg-green-500', error: 'bg-red-500', info: 'bg-blue-500' }[type] || 'bg-green-500';
+  const Icon = { success: CheckCircle, error: XCircle, info: AlertTriangle }[type] || CheckCircle;
   return (
     <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex items-start gap-3 px-5 py-3 rounded-2xl text-white shadow-2xl text-sm font-bold max-w-sm w-[92vw] ${bg}`}>
       <Icon size={18} className="mt-0.5 shrink-0" />
       <span className="flex-1 leading-snug">{msg}</span>
       <button onClick={onClose} className="opacity-70 hover:opacity-100 text-lg leading-none shrink-0">×</button>
-    </div>
-  );
-};
-
-// ─── DIAGNÓSTICO DE SCHEMA ────────────────────────────────────────────────────
-// Mostra as colunas reais das tabelas para o dev corrigir os nomes
-
-const SchemaDebugPanel = ({ onClose }) => {
-  const [info, setInfo]       = useState({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const tables = ['tenants', 'products', 'orders'];
-    Promise.all(
-      tables.map(async t => {
-        try {
-          const res  = await fetch(`${SUPABASE_URL}/rest/v1/${t}?limit=1`, { headers: baseHeaders() });
-          const json = await res.json();
-          if (!res.ok) return [t, { error: json?.message || JSON.stringify(json) }];
-          const cols = Array.isArray(json) && json.length > 0 ? Object.keys(json[0]) : ['(tabela vazia — sem registros para inferir colunas)'];
-          return [t, { cols, sample: json[0] }];
-        } catch (e) {
-          return [t, { error: e.message }];
-        }
-      })
-    ).then(results => {
-      setInfo(Object.fromEntries(results));
-      setLoading(false);
-    });
-  }, []);
-
-  return (
-    <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="sticky top-0 bg-white px-5 py-4 border-b flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Database size={18} className="text-blue-500" />
-            <h3 className="font-black text-gray-900">Diagnóstico do Schema (Supabase)</h3>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl">×</button>
-        </div>
-        <div className="p-5 space-y-4">
-          {loading ? (
-            <div className="flex justify-center py-8"><Spinner /></div>
-          ) : Object.entries(info).map(([table, data]) => (
-            <div key={table} className="border border-gray-200 rounded-xl overflow-hidden">
-              <div className="bg-gray-50 px-4 py-2 font-black text-sm text-gray-700 border-b flex items-center gap-2">
-                <code className="text-blue-600">{table}</code>
-                {data.error ? <span className="text-red-500 text-xs">❌ {data.error}</span> : <span className="text-green-500 text-xs">✓ acessível</span>}
-              </div>
-              {data.cols && (
-                <div className="p-4">
-                  <p className="text-xs text-gray-400 mb-2 font-bold">COLUNAS DETECTADAS:</p>
-                  <div className="flex flex-wrap gap-2">
-                    {data.cols.map(c => (
-                      <code key={c} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-mono font-bold border border-blue-100">{c}</code>
-                    ))}
-                  </div>
-                  {data.sample && (
-                    <details className="mt-3">
-                      <summary className="text-xs text-gray-400 cursor-pointer font-bold">Ver amostra de dados</summary>
-                      <pre className="mt-2 text-xs bg-gray-50 rounded-lg p-3 overflow-x-auto text-gray-600">{JSON.stringify(data.sample, null, 2)}</pre>
-                    </details>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-xs text-yellow-800">
-            <p className="font-black mb-1">⚠️ Como usar este diagnóstico:</p>
-            <p>Verifique os nomes das colunas acima e compare com o código. O erro mais comum é a coluna de FK em <code className="font-mono">products</code> que pode se chamar <code className="font-mono">store_id</code>, <code className="font-mono">loja_id</code> ou outro nome em vez de <code className="font-mono">tenant_id</code>.</p>
-          </div>
-        </div>
-      </div>
     </div>
   );
 };
@@ -184,45 +139,33 @@ export default function PedidoRapido() {
   const [cart, setCart]                   = useState([]);
   const [loading, setLoading]             = useState(false);
   const [toast, setToast]                 = useState(null);
-  const [showSchema, setShowSchema]       = useState(false);
-
-  // Schema: nomes reais das colunas (preenchidos ao primeiro uso)
-  // AJUSTE AQUI se seu banco tiver nomes diferentes:
-  const [schema] = useState({
-    tenants: {
-      id:        'id',
-      name:      'name',
-      slug:      'slug',
-      whatsapp:  'whatsapp',
-      password:  'password',
-      plan:      'plan',
-    },
-    products: {
-      id:        'id',
-      tenant_fk: 'tenant_id',   // ← ALTERE se a coluna tiver outro nome
-      name:      'name',
-      price:     'price',
-      image:     'image',
-      available: 'available',
-      description: 'description',
-    },
-  });
 
   const showToast = (msg, type = 'success') => setToast({ msg, type });
 
-  // ── Inicialização ──────────────────────────────────────────────────────
+  // Busca produtos do tenant pelo store_id (nome real da FK)
+  const fetchProducts = async (tenantId) => {
+    try {
+      return await apiFetch(DB.products.table, {
+        eq: { col: DB.products.storeId, val: tenantId }
+      });
+    } catch (e) {
+      console.warn('Erro ao buscar produtos:', e.message);
+      return [];
+    }
+  };
+
+  // ── Inicialização por URL ──────────────────────────────────────────────
   const loadTenantFromURL = useCallback(async (slug) => {
     if (!slug)             { setView('home');       return; }
     if (slug === 'master') { setView('saas-login'); return; }
 
     setLoading(true);
     try {
-      const rows   = await apiFetch('tenants', { eq: { column: schema.tenants.slug, value: slug } });
+      const rows   = await apiFetch(DB.tenants.table, { eq: { col: DB.tenants.slug, val: slug } });
       const tenant = rows[0] || null;
       if (tenant) {
         setCurrentTenant(tenant);
-        const prods = await apiFetch('products', { eq: { column: schema.products.tenant_fk, value: tenant[schema.tenants.id] } });
-        setProducts(prods);
+        setProducts(await fetchProducts(tenant[DB.tenants.id]));
         setView('menu');
         if (window.location.pathname !== `/${slug}`)
           window.history.replaceState({}, '', `/${slug}`);
@@ -237,7 +180,7 @@ export default function PedidoRapido() {
     } finally {
       setLoading(false);
     }
-  }, [schema]);
+  }, []);
 
   useEffect(() => {
     const slug = window.location.pathname.split('/').filter(Boolean)[0];
@@ -255,12 +198,11 @@ export default function PedidoRapido() {
   const accessTenant = async (slug) => {
     setLoading(true);
     try {
-      const rows   = await apiFetch('tenants', { eq: { column: schema.tenants.slug, value: slug } });
+      const rows   = await apiFetch(DB.tenants.table, { eq: { col: DB.tenants.slug, val: slug } });
       const tenant = rows[0] || null;
       if (tenant) {
         setCurrentTenant(tenant);
-        const prods = await apiFetch('products', { eq: { column: schema.products.tenant_fk, value: tenant[schema.tenants.id] } });
-        setProducts(prods);
+        setProducts(await fetchProducts(tenant[DB.tenants.id]));
         window.history.pushState({}, '', `/${slug}`);
         setView('menu');
       } else {
@@ -274,70 +216,63 @@ export default function PedidoRapido() {
   };
 
   // ── Criar tenant ────────────────────────────────────────────────────────
+  // CORRIGIDO: usa os campos corretos do schema real, sem enviar created_at
   const createTenant = async (name, slug, whatsapp, password) => {
     setLoading(true);
     try {
-      // 1. Checar duplicata
-      const existing = await apiFetch('tenants', { eq: { column: schema.tenants.slug, value: slug } });
+      // 1. Checar slug duplicado
+      const existing = await apiFetch(DB.tenants.table, { eq: { col: DB.tenants.slug, val: slug } });
       if (existing.length > 0) {
         showToast('Identificador já existe! Escolha outro.', 'error');
         return null;
       }
 
-      // 2. Montar payload apenas com campos confirmados no schema
-      //    NÃO envia created_at — o Supabase gera automaticamente
+      // 2. Inserir novo tenant — apenas campos confirmados no schema
       const payload = {
-        [schema.tenants.name]:     name,
-        [schema.tenants.slug]:     slug,
-        [schema.tenants.whatsapp]: whatsapp,
-        [schema.tenants.password]: password,
-        [schema.tenants.plan]:     'trial',
+        [DB.tenants.name]:     name,
+        [DB.tenants.slug]:     slug,
+        [DB.tenants.whatsapp]: whatsapp,
+        [DB.tenants.password]: password,
+        [DB.tenants.plan]:     'trial',
+        // created_at: gerado automaticamente pelo Supabase — NÃO enviar
       };
 
-      console.log('📤 Criando tenant com payload:', payload);
-      const tenant = await apiInsert('tenants', payload);
+      console.log('📤 Criando tenant:', payload);
+      const tenant = await apiInsert(DB.tenants.table, payload);
       console.log('✅ Tenant criado:', tenant);
 
       setCurrentTenant(tenant);
-
-      // 3. Buscar produtos (provavelmente vazio, mas mantém o fluxo)
-      try {
-        const prods = await apiFetch('products', { eq: { column: schema.products.tenant_fk, value: tenant[schema.tenants.id] } });
-        setProducts(prods);
-      } catch (prodErr) {
-        // Produtos podem não existir ainda — não é erro crítico
-        console.warn('Aviso ao buscar produtos:', prodErr.message);
-        setProducts([]);
-      }
-
+      setProducts([]); // novo tenant, sem produtos ainda
       window.history.pushState({}, '', `/${slug}`);
       setView('menu');
       showToast('✅ Lanchonete criada! 7 dias grátis começam agora.');
       return tenant;
     } catch (e) {
       console.error('createTenant error:', e);
-      showToast('Erro ao criar lanchonete: ' + e.message, 'error');
+      showToast('Erro ao criar: ' + e.message, 'error');
       return null;
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Criar pedido ────────────────────────────────────────────────────────
   const createOrder = async (tenantId, customerName, orderType, tableNumber, items, total) => {
-    await apiInsert('orders', {
-      tenant_id: tenantId,
-      customer_name: customerName,
-      order_type: orderType,
-      table_number: tableNumber,
-      items: JSON.stringify(items),
-      total,
-      status: 'aguardando',
+    // Tenta com store_id; se sua tabela orders usar tenant_id, troque DB.orders.storeId
+    await apiInsert(DB.orders.table, {
+      [DB.orders.storeId]:   tenantId,
+      [DB.orders.customer]:  customerName,
+      [DB.orders.type]:      orderType,
+      [DB.orders.table_num]: tableNumber,
+      [DB.orders.items]:     JSON.stringify(items),
+      [DB.orders.total]:     total,
+      [DB.orders.status]:    'aguardando',
     });
   };
 
-  // ══════════════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════════════
   //  VIEWS
-  // ══════════════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════════════
 
   // ── HOME ────────────────────────────────────────────────────────────────
   const HomePage = () => {
@@ -345,10 +280,10 @@ export default function PedidoRapido() {
     const [fetching, setFetching] = useState(true);
 
     useEffect(() => {
-      apiFetch('tenants', {
-        select: `${schema.tenants.id},${schema.tenants.name},${schema.tenants.slug}`,
+      apiFetch(DB.tenants.table, {
+        select: `${DB.tenants.id},${DB.tenants.name},${DB.tenants.slug}`,
         limit: 8,
-        order: { column: 'created_at', ascending: false },
+        order: { col: DB.tenants.createdAt, asc: false },
       })
         .then(setTenants)
         .catch(() => setTenants([]))
@@ -392,13 +327,13 @@ export default function PedidoRapido() {
               <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
                 {tenants.map(t => (
                   <button
-                    key={t[schema.tenants.id]}
-                    onClick={() => accessTenant(t[schema.tenants.slug])}
+                    key={t[DB.tenants.id]}
+                    onClick={() => accessTenant(t[DB.tenants.slug])}
                     className="w-full text-left px-4 py-3 bg-orange-50 hover:bg-orange-100 rounded-xl transition-all border border-orange-100 flex items-center justify-between group"
                   >
                     <div>
-                      <p className="font-bold text-gray-800 text-sm">{t[schema.tenants.name]}</p>
-                      <p className="text-xs text-gray-400">/{t[schema.tenants.slug]}</p>
+                      <p className="font-bold text-gray-800 text-sm">{t[DB.tenants.name]}</p>
+                      <p className="text-xs text-gray-400">/{t[DB.tenants.slug]}</p>
                     </div>
                     <ChevronRight size={16} className="text-orange-400 group-hover:translate-x-1 transition-transform" />
                   </button>
@@ -435,8 +370,7 @@ export default function PedidoRapido() {
             <p className="text-gray-400 text-sm mt-1">Digite o identificador único</p>
           </div>
           <input
-            type="text"
-            value={slug}
+            type="text" value={slug}
             onChange={e => setSlug(e.target.value.toLowerCase().trim())}
             onKeyDown={e => e.key === 'Enter' && slug && accessTenant(slug)}
             placeholder="ex: comabem"
@@ -530,9 +464,13 @@ export default function PedidoRapido() {
   // ── MENU ────────────────────────────────────────────────────────────────
   const MenuPage = () => {
     if (!currentTenant) return null;
-    const available  = products.filter(p => p[schema.products.available] !== false);
-    const cartCount  = cart.reduce((s, i) => s + i.qty, 0);
-    const cartTotal  = cart.reduce((s, i) => s + parseFloat(i[schema.products.price]) * i.qty, 0);
+    // is_available pode ser boolean true/false ou string 'true'/'false'
+    const available = products.filter(p => {
+      const v = p[DB.products.available];
+      return v === true || v === 'true';
+    });
+    const cartCount = cart.reduce((s, i) => s + i.qty, 0);
+    const cartTotal = cart.reduce((s, i) => s + parseFloat(i[DB.products.price]) * i.qty, 0);
 
     return (
       <div className="min-h-screen bg-gray-50">
@@ -541,7 +479,7 @@ export default function PedidoRapido() {
             <div className="flex items-center gap-2">
               <Zap size={22} />
               <div>
-                <h1 className="text-lg font-bold leading-tight">{currentTenant[schema.tenants.name]}</h1>
+                <h1 className="text-lg font-bold leading-tight">{currentTenant[DB.tenants.name]}</h1>
                 <p className="text-xs opacity-70">Pedido Rápido</p>
               </div>
             </div>
@@ -567,31 +505,54 @@ export default function PedidoRapido() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-2">
-              {available.map(p => (
-                <div key={p[schema.products.id]} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-all">
-                  <div className="text-5xl text-center mb-3">{p[schema.products.image]}</div>
-                  <h3 className="text-base font-bold text-center mb-1">{p[schema.products.name]}</h3>
-                  {p[schema.products.description] && (
-                    <p className="text-xs text-gray-400 text-center mb-2">{p[schema.products.description]}</p>
-                  )}
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-xl font-bold text-orange-500">R$ {parseFloat(p[schema.products.price]).toFixed(2)}</span>
-                    <button
-                      onClick={() => {
-                        const pid = p[schema.products.id];
-                        const ex  = cart.find(i => i[schema.products.id] === pid);
-                        setCart(ex
-                          ? cart.map(i => i[schema.products.id] === pid ? { ...i, qty: i.qty + 1 } : i)
-                          : [...cart, { ...p, qty: 1 }]
-                        );
-                      }}
-                      className="bg-orange-500 hover:bg-orange-600 active:scale-95 text-white px-3 py-2 rounded-xl flex items-center gap-1 text-sm font-bold transition-all"
-                    >
-                      <Plus size={15} /> Adicionar
-                    </button>
+              {available.map(p => {
+                const pid   = p[DB.products.id];
+                const pname = p[DB.products.name];
+                const pprice= p[DB.products.price];
+                const pimg  = p[DB.products.image];
+                const pdesc = p[DB.products.description];
+                const isUrl = pimg && (pimg.startsWith('http') || pimg.startsWith('data:'));
+
+                return (
+                  <div key={pid} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-all">
+                    {isUrl && (
+                      <img
+                        src={pimg}
+                        alt={pname}
+                        className="w-full h-40 object-cover"
+                        onError={e => { e.target.style.display = 'none'; }}
+                      />
+                    )}
+                    {!isUrl && (
+                      <div className="text-5xl text-center pt-4">{pimg}</div>
+                    )}
+                    <div className="p-4">
+                      <h3 className="text-base font-bold mb-1">{pname}</h3>
+                      {pdesc && <p className="text-xs text-gray-400 mb-2 line-clamp-2">{pdesc}</p>}
+                      {p[DB.products.category] && (
+                        <span className="text-xs bg-orange-50 text-orange-500 px-2 py-0.5 rounded-lg font-bold border border-orange-100 mb-2 inline-block">
+                          {p[DB.products.category]}
+                        </span>
+                      )}
+                      <div className="flex items-center justify-between mt-2">
+                        <span className="text-xl font-bold text-orange-500">R$ {parseFloat(pprice).toFixed(2)}</span>
+                        <button
+                          onClick={() => {
+                            const ex = cart.find(i => i[DB.products.id] === pid);
+                            setCart(ex
+                              ? cart.map(i => i[DB.products.id] === pid ? { ...i, qty: i.qty + 1 } : i)
+                              : [...cart, { ...p, qty: 1 }]
+                            );
+                          }}
+                          className="bg-orange-500 hover:bg-orange-600 active:scale-95 text-white px-3 py-2 rounded-xl flex items-center gap-1 text-sm font-bold transition-all"
+                        >
+                          <Plus size={15} /> Adicionar
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </main>
@@ -620,18 +581,26 @@ export default function PedidoRapido() {
     const [sending, setSending]     = useState(false);
     if (!currentTenant) return null;
 
-    const total = cart.reduce((s, i) => s + parseFloat(i[schema.products.price]) * i.qty, 0);
+    const total = cart.reduce((s, i) => s + parseFloat(i[DB.products.price]) * i.qty, 0);
 
     const handleSend = async () => {
-      if (!name.trim())                             return showToast('Digite seu nome!', 'error');
+      if (!name.trim())                              return showToast('Digite seu nome!', 'error');
       if (orderType === 'local' && !tableNum.trim()) return showToast('Digite a mesa!', 'error');
       setSending(true);
       try {
-        let msg = `🍔 *PEDIDO RÁPIDO*%0A${currentTenant[schema.tenants.name]}%0A%0A👤 ${name}%0A📍 ${orderType === 'local' ? `Mesa ${tableNum}` : 'Para Viagem'}%0A%0A`;
-        cart.forEach(i => msg += `${i[schema.products.image] || ''} ${i[schema.products.name]} x${i.qty} — R$${(parseFloat(i[schema.products.price]) * i.qty).toFixed(2)}%0A`);
+        let msg = `🍔 *PEDIDO RÁPIDO*%0A${currentTenant[DB.tenants.name]}%0A%0A👤 ${name}%0A📍 ${orderType === 'local' ? `Mesa ${tableNum}` : 'Para Viagem'}%0A%0A`;
+        cart.forEach(i => {
+          const img = i[DB.products.image] || '';
+          const emoji = img.startsWith('http') || img.startsWith('data:') ? '' : img + ' ';
+          msg += `${emoji}${i[DB.products.name]} x${i.qty} — R$${(parseFloat(i[DB.products.price]) * i.qty).toFixed(2)}%0A`;
+        });
         msg += `%0A━━━━━━━━━━━━%0A💰 *TOTAL: R$${total.toFixed(2)}*`;
-        await createOrder(currentTenant[schema.tenants.id], name, orderType, tableNum, cart, total);
-        window.open(`https://wa.me/${currentTenant[schema.tenants.whatsapp]}?text=${msg}`, '_blank');
+        try {
+          await createOrder(currentTenant[DB.tenants.id], name, orderType, tableNum, cart, total);
+        } catch (orderErr) {
+          console.warn('Erro ao salvar pedido (não bloqueia WhatsApp):', orderErr.message);
+        }
+        window.open(`https://wa.me/${currentTenant[DB.tenants.whatsapp]}?text=${msg}`, '_blank');
         setCart([]);
         showToast('✅ Pedido enviado!');
         go('menu');
@@ -647,7 +616,7 @@ export default function PedidoRapido() {
         <header className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-4 shadow-lg">
           <div className="max-w-2xl mx-auto">
             <button onClick={() => go('menu')} className="flex items-center gap-2 mb-1 opacity-80 hover:opacity-100 transition text-sm">
-              <ArrowLeft size={16} /> Voltar ao Cardápio
+              <ArrowLeft size={16} /> Voltar
             </button>
             <h1 className="text-2xl font-bold">Seu Carrinho</h1>
           </div>
@@ -662,22 +631,31 @@ export default function PedidoRapido() {
           ) : (
             <>
               <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
-                {cart.map(item => (
-                  <div key={item[schema.products.id]} className="flex items-center gap-3 py-2 border-b last:border-0">
-                    <span className="text-3xl">{item[schema.products.image]}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-sm truncate">{item[schema.products.name]}</p>
-                      <p className="text-orange-500 text-xs">R$ {parseFloat(item[schema.products.price]).toFixed(2)}</p>
+                {cart.map(item => {
+                  const pid   = item[DB.products.id];
+                  const pimg  = item[DB.products.image] || '';
+                  const isUrl = pimg.startsWith('http') || pimg.startsWith('data:');
+                  return (
+                    <div key={pid} className="flex items-center gap-3 py-2 border-b last:border-0">
+                      {isUrl
+                        ? <img src={pimg} alt="" className="w-12 h-12 rounded-xl object-cover shrink-0" onError={e => { e.target.style.display='none'; }} />
+                        : <span className="text-3xl shrink-0">{pimg}</span>
+                      }
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-sm truncate">{item[DB.products.name]}</p>
+                        <p className="text-orange-500 text-xs">R$ {parseFloat(item[DB.products.price]).toFixed(2)}</p>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => setCart(cart.map(i => i[DB.products.id] === pid ? { ...i, qty: Math.max(1, i.qty - 1) } : i))} className="bg-gray-100 hover:bg-gray-200 active:scale-90 p-1.5 rounded-lg transition"><Minus size={13} /></button>
+                        <span className="font-bold w-6 text-center text-sm">{item.qty}</span>
+                        <button onClick={() => setCart(cart.map(i => i[DB.products.id] === pid ? { ...i, qty: i.qty + 1 } : i))} className="bg-orange-500 hover:bg-orange-600 active:scale-90 text-white p-1.5 rounded-lg transition"><Plus size={13} /></button>
+                        <button onClick={() => setCart(cart.filter(i => i[DB.products.id] !== pid))} className="bg-red-50 hover:bg-red-500 text-red-400 hover:text-white active:scale-90 p-1.5 rounded-lg transition ml-1"><Trash2 size={13} /></button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <button onClick={() => setCart(cart.map(i => i[schema.products.id] === item[schema.products.id] ? { ...i, qty: Math.max(1, i.qty - 1) } : i))} className="bg-gray-100 hover:bg-gray-200 active:scale-90 p-1.5 rounded-lg transition"><Minus size={13} /></button>
-                      <span className="font-bold w-6 text-center text-sm">{item.qty}</span>
-                      <button onClick={() => setCart(cart.map(i => i[schema.products.id] === item[schema.products.id] ? { ...i, qty: i.qty + 1 } : i))} className="bg-orange-500 hover:bg-orange-600 active:scale-90 text-white p-1.5 rounded-lg transition"><Plus size={13} /></button>
-                      <button onClick={() => setCart(cart.filter(i => i[schema.products.id] !== item[schema.products.id]))} className="bg-red-50 hover:bg-red-500 text-red-400 hover:text-white active:scale-90 p-1.5 rounded-lg transition ml-1"><Trash2 size={13} /></button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
+
               <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
                 <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Seu nome" className="w-full px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl outline-none transition font-medium" />
                 <div className="grid grid-cols-2 gap-2">
@@ -688,6 +666,7 @@ export default function PedidoRapido() {
                   <input type="text" value={tableNum} onChange={e => setTableNum(e.target.value)} placeholder="Número da mesa" className="w-full px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl outline-none transition font-medium" />
                 )}
               </div>
+
               <div className="bg-white rounded-2xl shadow-sm p-4">
                 <div className="flex justify-between items-center mb-4">
                   <span className="font-bold text-gray-700">Total</span>
@@ -721,13 +700,13 @@ export default function PedidoRapido() {
               <Lock size={30} className="text-purple-500" />
             </div>
             <h2 className="text-2xl font-bold">Área Admin</h2>
-            <p className="text-gray-400 text-sm mt-1">{currentTenant[schema.tenants.name]}</p>
+            <p className="text-gray-400 text-sm mt-1">{currentTenant[DB.tenants.name]}</p>
           </div>
           <div className="relative mb-4">
             <input
               type={show ? 'text' : 'password'} value={pass}
               onChange={e => setPass(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && pass === currentTenant[schema.tenants.password]) go('admin'); }}
+              onKeyDown={e => { if (e.key === 'Enter' && pass === currentTenant[DB.tenants.password]) go('admin'); }}
               placeholder="Senha do admin"
               className="w-full px-4 py-3 pr-12 border-2 border-gray-200 focus:border-purple-400 rounded-xl outline-none transition font-medium"
             />
@@ -736,7 +715,7 @@ export default function PedidoRapido() {
             </button>
           </div>
           <button
-            onClick={() => { if (pass === currentTenant[schema.tenants.password]) go('admin'); else showToast('Senha incorreta!', 'error'); }}
+            onClick={() => { if (pass === currentTenant[DB.tenants.password]) go('admin'); else showToast('Senha incorreta!', 'error'); }}
             className="w-full bg-purple-500 hover:bg-purple-600 active:scale-95 text-white py-3.5 rounded-xl font-bold transition-all"
           >Entrar</button>
         </div>
@@ -746,16 +725,17 @@ export default function PedidoRapido() {
 
   // ── ADMIN PAGE ──────────────────────────────────────────────────────────
   const AdminPage = () => {
-    const [wpp, setWpp]       = useState(currentTenant?.[schema.tenants.whatsapp] || '');
+    const [wpp, setWpp]       = useState(currentTenant?.[DB.tenants.whatsapp] || '');
     const [saving, setSaving] = useState(false);
     if (!currentTenant) return null;
+
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
         <header className="bg-white shadow-sm px-4 py-4 sticky top-0 z-40">
           <div className="max-w-4xl mx-auto flex justify-between items-center">
             <div>
               <h1 className="text-xl font-black text-gray-800">Painel Admin</h1>
-              <p className="text-xs text-gray-400">{currentTenant[schema.tenants.name]}</p>
+              <p className="text-xs text-gray-400">{currentTenant[DB.tenants.name]}</p>
             </div>
             <button onClick={() => go('menu')} className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-xl text-sm font-bold transition">Sair</button>
           </div>
@@ -763,9 +743,9 @@ export default function PedidoRapido() {
         <main className="max-w-4xl mx-auto p-4 space-y-4">
           <div className="grid grid-cols-3 gap-3">
             {[
-              { label: 'Plano',    value: currentTenant[schema.tenants.plan], color: 'text-purple-500' },
-              { label: 'Produtos', value: products.length,                    color: 'text-blue-500'   },
-              { label: 'Status',   value: 'Ativo',                            color: 'text-green-500'  },
+              { label: 'Plano',    value: currentTenant[DB.tenants.plan], color: 'text-purple-500' },
+              { label: 'Produtos', value: products.length, color: 'text-blue-500' },
+              { label: 'Status',   value: 'Ativo', color: 'text-green-500' },
             ].map(s => (
               <div key={s.label} className="bg-white rounded-2xl shadow-sm p-4 text-center">
                 <p className="text-xs text-gray-400 mb-1 font-medium">{s.label}</p>
@@ -773,42 +753,64 @@ export default function PedidoRapido() {
               </div>
             ))}
           </div>
+
           <div className="bg-white rounded-2xl shadow-sm p-4">
             <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2 text-sm"><Phone size={16} className="text-green-500" /> WhatsApp</h3>
             <div className="flex gap-2">
               <input type="tel" value={wpp} onChange={e => setWpp(e.target.value.replace(/[^0-9]/g, ''))} placeholder="5585999999999" className="flex-1 px-4 py-2.5 border-2 border-gray-200 focus:border-purple-400 rounded-xl outline-none text-sm font-medium transition" />
-              <button onClick={async () => { setSaving(true); try { await apiUpdate('tenants', schema.tenants.id, currentTenant[schema.tenants.id], { [schema.tenants.whatsapp]: wpp }); setCurrentTenant({ ...currentTenant, [schema.tenants.whatsapp]: wpp }); showToast('WhatsApp atualizado!'); } catch (e) { showToast('Erro: ' + e.message, 'error'); } finally { setSaving(false); } }} className="bg-purple-500 hover:bg-purple-600 active:scale-95 text-white px-4 py-2.5 rounded-xl font-bold text-sm transition-all">
+              <button
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await apiUpdate(DB.tenants.table, DB.tenants.id, currentTenant[DB.tenants.id], { [DB.tenants.whatsapp]: wpp });
+                    setCurrentTenant({ ...currentTenant, [DB.tenants.whatsapp]: wpp });
+                    showToast('WhatsApp atualizado!');
+                  } catch (e) { showToast('Erro: ' + e.message, 'error'); }
+                  finally { setSaving(false); }
+                }}
+                className="bg-purple-500 hover:bg-purple-600 active:scale-95 text-white px-4 py-2.5 rounded-xl font-bold text-sm transition-all"
+              >
                 {saving ? <Spinner size={16} color="text-white" /> : 'Salvar'}
               </button>
             </div>
           </div>
+
           <div className="bg-white rounded-2xl shadow-sm p-4">
             <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2 text-sm"><Package size={16} className="text-blue-500" /> Produtos</h3>
             {products.length === 0 ? (
               <p className="text-center text-gray-400 text-sm py-6">Nenhum produto cadastrado</p>
             ) : (
               <div className="space-y-2">
-                {products.map(p => (
-                  <div key={p[schema.products.id]} className="flex items-center justify-between p-3 border-2 border-gray-100 rounded-xl hover:border-purple-200 transition">
-                    <div className="flex items-center gap-3">
-                      <span className="text-2xl">{p[schema.products.image]}</span>
-                      <div>
-                        <p className="font-bold text-sm">{p[schema.products.name]}</p>
-                        <p className="text-xs text-gray-400">R$ {parseFloat(p[schema.products.price]).toFixed(2)}</p>
+                {products.map(p => {
+                  const pid     = p[DB.products.id];
+                  const pimg    = p[DB.products.image] || '';
+                  const isUrl   = pimg.startsWith('http') || pimg.startsWith('data:');
+                  const isAvail = p[DB.products.available] === true || p[DB.products.available] === 'true';
+                  return (
+                    <div key={pid} className="flex items-center justify-between p-3 border-2 border-gray-100 rounded-xl hover:border-purple-200 transition">
+                      <div className="flex items-center gap-3">
+                        {isUrl
+                          ? <img src={pimg} alt="" className="w-10 h-10 rounded-lg object-cover" />
+                          : <span className="text-2xl">{pimg}</span>
+                        }
+                        <div>
+                          <p className="font-bold text-sm">{p[DB.products.name]}</p>
+                          <p className="text-xs text-gray-400">R$ {parseFloat(p[DB.products.price]).toFixed(2)}</p>
+                        </div>
                       </div>
+                      <button
+                        onClick={async () => {
+                          const newA = !isAvail;
+                          await apiUpdate(DB.products.table, DB.products.id, pid, { [DB.products.available]: newA });
+                          setProducts(products.map(pr => pr[DB.products.id] === pid ? { ...pr, [DB.products.available]: newA } : pr));
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition active:scale-95 ${isAvail ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                      >
+                        {isAvail ? '✓ Disponível' : '✗ Indisponível'}
+                      </button>
                     </div>
-                    <button
-                      onClick={async () => {
-                        const newA = !p[schema.products.available];
-                        await apiUpdate('products', schema.products.id, p[schema.products.id], { [schema.products.available]: newA });
-                        setProducts(products.map(pr => pr[schema.products.id] === p[schema.products.id] ? { ...pr, [schema.products.available]: newA } : pr));
-                      }}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition active:scale-95 ${p[schema.products.available] ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
-                    >
-                      {p[schema.products.available] ? '✓ Disponível' : '✗ Indisponível'}
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -857,20 +859,20 @@ export default function PedidoRapido() {
 
   // ── SAAS DASHBOARD ──────────────────────────────────────────────────────
   const SaaSDashboard = () => {
-    const [tenants, setTenants]         = useState([]);
-    const [dashLoading, setDashLoading] = useState(true);
+    const [tenants, setTenants]             = useState([]);
+    const [dashLoading, setDashLoading]     = useState(true);
+    const [refreshing, setRefreshing]       = useState(false);
     const [showMasterPass, setShowMasterPass] = useState(false);
-    const [masterPassForm, setMasterPassForm] = useState({ current: '', next: '', confirm: '' });
-    const [masterPassLocal, setMasterPassLocal] = useState(SAAS_PASSWORD);
-    const [editingId, setEditingId]     = useState(null);
-    const [storePass, setStorePass]     = useState('');
+    const [masterForm, setMasterForm]       = useState({ current: '', next: '', confirm: '' });
+    const [masterLocal, setMasterLocal]     = useState(SAAS_PASSWORD);
+    const [editingId, setEditingId]         = useState(null);
+    const [storePass, setStorePass]         = useState('');
     const [showStorePass, setShowStorePass] = useState(false);
-    const [refreshing, setRefreshing]   = useState(false);
 
     const load = async () => {
       setRefreshing(true);
       try {
-        const rows = await apiFetch('tenants', { order: { column: 'created_at', ascending: false } });
+        const rows = await apiFetch(DB.tenants.table, { order: { col: DB.tenants.createdAt, asc: false } });
         setTenants(rows);
       } catch (e) { showToast('Erro: ' + e.message, 'error'); }
       finally { setDashLoading(false); setRefreshing(false); }
@@ -878,30 +880,30 @@ export default function PedidoRapido() {
     useEffect(() => { load(); }, []);
 
     const handleDelete = async (id) => {
-      if (!window.confirm('Excluir permanentemente esta lanchonete?')) return;
-      await apiDelete('tenants', 'id', id);
-      setTenants(t => t.filter(x => x.id !== id));
+      if (!window.confirm('Excluir permanentemente esta lanchonete? Esta ação não pode ser desfeita.')) return;
+      await apiDelete(DB.tenants.table, DB.tenants.id, id);
+      setTenants(t => t.filter(x => x[DB.tenants.id] !== id));
       showToast('Lanchonete excluída.');
     };
 
     const handleStorePass = async (id) => {
       if (!storePass || storePass.length < 3) { showToast('Senha muito curta (mín. 3 caracteres)', 'error'); return; }
       try {
-        await apiUpdate('tenants', 'id', id, { [schema.tenants.password]: storePass });
-        setTenants(t => t.map(x => x.id === id ? { ...x, [schema.tenants.password]: storePass } : x));
+        await apiUpdate(DB.tenants.table, DB.tenants.id, id, { [DB.tenants.password]: storePass });
+        setTenants(t => t.map(x => x[DB.tenants.id] === id ? { ...x, [DB.tenants.password]: storePass } : x));
         setEditingId(null); setStorePass('');
         showToast('✅ Senha da lanchonete atualizada!');
       } catch (e) { showToast('Erro: ' + e.message, 'error'); }
     };
 
     const handleMasterPass = () => {
-      if (masterPassForm.current !== masterPassLocal) { showToast('Senha atual incorreta!', 'error'); return; }
-      if (!masterPassForm.next || masterPassForm.next.length < 4) { showToast('Nova senha muito curta (mín. 4)', 'error'); return; }
-      if (masterPassForm.next !== masterPassForm.confirm) { showToast('As senhas não coincidem!', 'error'); return; }
-      setMasterPassLocal(masterPassForm.next);
-      setMasterPassForm({ current: '', next: '', confirm: '' });
+      if (masterForm.current !== masterLocal)        { showToast('Senha atual incorreta!', 'error'); return; }
+      if (!masterForm.next || masterForm.next.length < 4) { showToast('Nova senha muito curta (mín. 4)', 'error'); return; }
+      if (masterForm.next !== masterForm.confirm)    { showToast('As senhas não coincidem!', 'error'); return; }
+      setMasterLocal(masterForm.next);
+      setMasterForm({ current: '', next: '', confirm: '' });
       setShowMasterPass(false);
-      showToast('✅ Senha master alterada! Para persistir, configure VITE_SAAS_PASSWORD no Vercel.');
+      showToast('✅ Senha master alterada! Configure VITE_SAAS_PASSWORD no Vercel para persistir.');
     };
 
     return (
@@ -916,10 +918,7 @@ export default function PedidoRapido() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => setShowSchema(true)} className="p-2 bg-white/10 hover:bg-white/20 rounded-xl transition active:scale-90" title="Diagnóstico do banco">
-                <Database size={16} />
-              </button>
-              <button onClick={load} disabled={refreshing} className="p-2 bg-white/10 hover:bg-white/20 rounded-xl transition active:scale-90 disabled:opacity-40">
+              <button onClick={load} disabled={refreshing} className="p-2 bg-white/10 hover:bg-white/20 rounded-xl transition active:scale-90 disabled:opacity-40" title="Atualizar">
                 <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
               </button>
               <button
@@ -933,7 +932,7 @@ export default function PedidoRapido() {
 
         <main className="max-w-5xl mx-auto p-4 space-y-5">
 
-          {/* Alterar senha master */}
+          {/* ── Alterar Senha Master ─────────────────────────────────── */}
           {showMasterPass && (
             <div className="bg-white border-2 border-gray-200 rounded-2xl shadow-lg p-5">
               <div className="flex items-center justify-between mb-4">
@@ -945,16 +944,16 @@ export default function PedidoRapido() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
                 {[
-                  { label: 'Senha Atual',  key: 'current', ph: '••••••••' },
-                  { label: 'Nova Senha',   key: 'next',    ph: 'Mín. 4 caracteres' },
-                  { label: 'Confirmar',    key: 'confirm', ph: 'Repita a nova senha' },
+                  { label: 'Senha Atual', key: 'current', ph: '••••••••' },
+                  { label: 'Nova Senha',  key: 'next',    ph: 'Mín. 4 caracteres' },
+                  { label: 'Confirmar',   key: 'confirm', ph: 'Repita a nova senha' },
                 ].map(f => (
                   <div key={f.key}>
                     <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">{f.label}</label>
                     <input
                       type="password"
-                      value={masterPassForm[f.key]}
-                      onChange={e => setMasterPassForm(x => ({ ...x, [f.key]: e.target.value }))}
+                      value={masterForm[f.key]}
+                      onChange={e => setMasterForm(x => ({ ...x, [f.key]: e.target.value }))}
                       placeholder={f.ph}
                       className="w-full px-4 py-2.5 border-2 border-gray-200 focus:border-gray-700 rounded-xl outline-none text-sm font-medium transition"
                     />
@@ -966,18 +965,18 @@ export default function PedidoRapido() {
                   Atualizar Senha Master
                 </button>
                 <p className="text-xs text-gray-400">
-                  ⚠️ Para persistir: configure <code className="bg-gray-100 px-1 rounded font-mono">VITE_SAAS_PASSWORD</code> no Vercel.
+                  ⚠️ Para persistir: defina <code className="bg-gray-100 px-1 rounded font-mono">VITE_SAAS_PASSWORD</code> no Vercel.
                 </p>
               </div>
             </div>
           )}
 
-          {/* Stats */}
+          {/* ── Stats ──────────────────────────────────────────────────── */}
           <div className="grid grid-cols-3 gap-3">
             {[
               { label: 'Lanchonetes', value: tenants.length, color: 'text-orange-500', bg: 'bg-orange-100', Icon: Store },
-              { label: 'Trial',       value: tenants.filter(t => t[schema.tenants.plan] === 'trial').length, color: 'text-green-500', bg: 'bg-green-100', Icon: Users },
-              { label: 'Pro',         value: tenants.filter(t => t[schema.tenants.plan] === 'pro').length,   color: 'text-blue-500',  bg: 'bg-blue-100',  Icon: BarChart2 },
+              { label: 'Trial',       value: tenants.filter(t => t[DB.tenants.plan] === 'trial').length, color: 'text-green-500', bg: 'bg-green-100', Icon: Users },
+              { label: 'Pro',         value: tenants.filter(t => t[DB.tenants.plan] === 'pro').length,   color: 'text-blue-500',  bg: 'bg-blue-100',  Icon: BarChart2 },
             ].map(s => (
               <div key={s.label} className="bg-white rounded-2xl shadow-sm p-4 text-center border border-gray-100">
                 <div className={`w-10 h-10 ${s.bg} rounded-xl flex items-center justify-center mx-auto mb-2`}>
@@ -989,12 +988,13 @@ export default function PedidoRapido() {
             ))}
           </div>
 
-          {/* Lista */}
+          {/* ── Lista de lanchonetes ────────────────────────────────────── */}
           <div>
             <div className="flex items-center justify-between mb-3 px-1">
               <h3 className="font-black text-gray-800">Base de Clientes</h3>
               <span className="text-xs font-bold bg-gray-100 px-3 py-1 rounded-full text-gray-400 uppercase">Tempo Real</span>
             </div>
+
             {dashLoading ? (
               <div className="flex justify-center py-12"><Spinner size={32} color="text-gray-400" /></div>
             ) : tenants.length === 0 ? (
@@ -1002,76 +1002,98 @@ export default function PedidoRapido() {
                 <Store size={40} className="mx-auto mb-2 opacity-40" />
                 <p className="font-bold">Nenhuma lanchonete cadastrada</p>
               </div>
-            ) : tenants.map(store => (
-              <div key={store.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-all mb-3">
-                <div className="p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center font-black text-orange-500 text-xl shrink-0">
-                        {store[schema.tenants.name]?.charAt(0)}
-                      </div>
-                      <div className="min-w-0">
-                        <h4 className="font-black text-gray-900 truncate">{store[schema.tenants.name]}</h4>
-                        <div className="flex flex-wrap gap-1.5 mt-1">
-                          <span className="text-xs bg-orange-50 text-orange-500 px-2 py-0.5 rounded-lg font-bold border border-orange-100">@{store[schema.tenants.slug]}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded-lg font-bold ${store[schema.tenants.plan] === 'pro' ? 'bg-blue-50 text-blue-500 border border-blue-100' : 'bg-gray-50 text-gray-400 border border-gray-100'}`}>{store[schema.tenants.plan]}</span>
+            ) : tenants.map(store => {
+              const sid  = store[DB.tenants.id];
+              const name = store[DB.tenants.name];
+              const slug = store[DB.tenants.slug];
+              const plan = store[DB.tenants.plan];
+              const wpp  = store[DB.tenants.whatsapp];
+              const pass = store[DB.tenants.password];
+              const cat  = store[DB.tenants.createdAt];
+              return (
+                <div key={sid} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-all mb-3">
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center font-black text-orange-500 text-xl shrink-0">
+                          {name?.charAt(0)}
                         </div>
-                        <div className="flex flex-wrap gap-3 mt-1">
-                          <span className="text-xs text-gray-400 flex items-center gap-1"><Phone size={10} /> {store[schema.tenants.whatsapp]}</span>
-                          {store.created_at && <span className="text-xs text-gray-300 flex items-center gap-1"><Calendar size={10} /> {new Date(store.created_at).toLocaleDateString('pt-BR')}</span>}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button onClick={() => { setCurrentTenant(store); go('menu', store[schema.tenants.slug]); }} className="p-2 bg-orange-50 hover:bg-orange-500 text-orange-400 hover:text-white rounded-xl transition active:scale-90" title="Ver cardápio"><Eye size={15} /></button>
-                      <button onClick={() => { setEditingId(editingId === store.id ? null : store.id); setStorePass(''); }} className={`p-2 rounded-xl transition active:scale-90 ${editingId === store.id ? 'bg-gray-900 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-500'}`} title="Resetar senha"><Key size={15} /></button>
-                      <button onClick={() => handleDelete(store.id)} className="p-2 bg-red-50 hover:bg-red-500 text-red-400 hover:text-white rounded-xl transition active:scale-90" title="Excluir"><Trash size={15} /></button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Reset senha da loja */}
-                {editingId === store.id && (
-                  <div className="border-t border-gray-100 bg-gray-50 p-4">
-                    <p className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-1">
-                      <Key size={11} /> Resetar Senha — {store[schema.tenants.name]}
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-                      <div>
-                        <label className="text-xs text-gray-400 font-bold mb-1 block">Senha atual</label>
-                        <div className="bg-white border border-gray-200 rounded-xl px-4 py-2.5 font-mono text-sm font-bold text-gray-600 flex items-center justify-between">
-                          <span>{store[schema.tenants.password]}</span>
-                          <Key size={12} className="text-gray-300" />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="text-xs text-gray-400 font-bold mb-1 block">Nova senha provisória</label>
-                        <div className="flex gap-2">
-                          <div className="relative flex-1">
-                            <input
-                              type={showStorePass ? 'text' : 'password'}
-                              value={storePass}
-                              onChange={e => setStorePass(e.target.value)}
-                              placeholder="Mín. 3 caracteres"
-                              className="w-full bg-white border-2 border-gray-200 focus:border-gray-700 rounded-xl px-4 py-2.5 text-sm font-bold outline-none transition pr-10"
-                            />
-                            <button onClick={() => setShowStorePass(!showStorePass)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
-                              {showStorePass ? <EyeOff size={14} /> : <Eye size={14} />}
-                            </button>
+                        <div className="min-w-0">
+                          <h4 className="font-black text-gray-900 truncate">{name}</h4>
+                          <div className="flex flex-wrap gap-1.5 mt-1">
+                            <span className="text-xs bg-orange-50 text-orange-500 px-2 py-0.5 rounded-lg font-bold border border-orange-100">@{slug}</span>
+                            <span className={`text-xs px-2 py-0.5 rounded-lg font-bold ${plan === 'pro' ? 'bg-blue-50 text-blue-500 border border-blue-100' : 'bg-gray-50 text-gray-400 border border-gray-100'}`}>{plan}</span>
                           </div>
-                          <button onClick={() => handleStorePass(store.id)} className="bg-gray-900 hover:bg-gray-700 active:scale-95 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all whitespace-nowrap">
-                            Salvar
-                          </button>
+                          <div className="flex flex-wrap gap-3 mt-1">
+                            <span className="text-xs text-gray-400 flex items-center gap-1"><Phone size={10} /> {wpp}</span>
+                            {cat && <span className="text-xs text-gray-300 flex items-center gap-1"><Calendar size={10} /> {new Date(cat).toLocaleDateString('pt-BR')}</span>}
+                          </div>
                         </div>
                       </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => { setCurrentTenant(store); go('menu', slug); }}
+                          className="p-2 bg-orange-50 hover:bg-orange-500 text-orange-400 hover:text-white rounded-xl transition active:scale-90"
+                          title="Ver cardápio"
+                        ><Eye size={15} /></button>
+                        <button
+                          onClick={() => { setEditingId(editingId === sid ? null : sid); setStorePass(''); }}
+                          className={`p-2 rounded-xl transition active:scale-90 ${editingId === sid ? 'bg-gray-900 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-500'}`}
+                          title="Resetar senha"
+                        ><Key size={15} /></button>
+                        <button
+                          onClick={() => handleDelete(sid)}
+                          className="p-2 bg-red-50 hover:bg-red-500 text-red-400 hover:text-white rounded-xl transition active:scale-90"
+                          title="Excluir"
+                        ><Trash size={15} /></button>
+                      </div>
                     </div>
-                    <p className="text-xs text-yellow-800 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
-                      💡 Após salvar, comunique a senha provisória ao dono. Oriente-o a alterá-la no painel admin.
-                    </p>
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {/* ── Reset senha da loja ───────────────────────────── */}
+                  {editingId === sid && (
+                    <div className="border-t border-gray-100 bg-gray-50 p-4">
+                      <p className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-1">
+                        <Key size={11} /> Resetar Senha do Admin — {name}
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                        <div>
+                          <label className="text-xs text-gray-400 font-bold mb-1 block">Senha atual</label>
+                          <div className="bg-white border border-gray-200 rounded-xl px-4 py-2.5 font-mono text-sm font-bold text-gray-600 flex items-center justify-between">
+                            <span>{pass}</span>
+                            <Key size={12} className="text-gray-300" />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-400 font-bold mb-1 block">Nova senha provisória</label>
+                          <div className="flex gap-2">
+                            <div className="relative flex-1">
+                              <input
+                                type={showStorePass ? 'text' : 'password'}
+                                value={storePass}
+                                onChange={e => setStorePass(e.target.value)}
+                                placeholder="Mín. 3 caracteres"
+                                className="w-full bg-white border-2 border-gray-200 focus:border-gray-700 rounded-xl px-4 py-2.5 text-sm font-bold outline-none transition pr-10"
+                              />
+                              <button onClick={() => setShowStorePass(!showStorePass)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+                                {showStorePass ? <EyeOff size={14} /> : <Eye size={14} />}
+                              </button>
+                            </div>
+                            <button
+                              onClick={() => handleStorePass(sid)}
+                              className="bg-gray-900 hover:bg-gray-700 active:scale-95 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all whitespace-nowrap"
+                            >Salvar</button>
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-xs text-yellow-800 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
+                        💡 Após salvar, comunique a senha provisória ao dono da lanchonete para que ele acesse e altere pelo painel admin.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </main>
       </div>
@@ -1091,8 +1113,6 @@ export default function PedidoRapido() {
       {view === 'admin'          && <AdminPage />}
       {view === 'saas-login'     && <SaaSLoginPage />}
       {view === 'saas-dashboard' && <SaaSDashboard />}
-
-      {showSchema && <SchemaDebugPanel onClose={() => setShowSchema(false)} />}
       {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </>
   );
