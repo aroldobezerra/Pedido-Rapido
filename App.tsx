@@ -413,7 +413,7 @@ const PedidoRapido = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {products.filter(p => p.available).map(p => (
+              {products.filter(p => p.is_available).map(p => (
                 <div key={p.id} className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition transform hover:scale-105">
                   <div className="text-6xl text-center mb-4">{p.image}</div>
                   <h3 className="text-xl font-bold text-center mb-2">{p.name}</h3>
@@ -631,13 +631,13 @@ const PedidoRapido = () => {
                   </div>
                   <button
                     onClick={async () => {
-                      const newAvail = !p.available;
-                      await updateProduct(p.id, { available: newAvail });
-                      setProducts(products.map(pr => pr.id === p.id ? {...pr, available: newAvail} : pr));
+                      const newAvail = !p.is_available;
+                      await updateProduct(p.id, { is_available: newAvail });
+                      setProducts(products.map(pr => pr.id === p.id ? {...pr, is_available: newAvail} : pr));
                     }}
-                    className={`px-4 py-2 rounded-lg font-semibold transition ${p.available ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                    className={`px-4 py-2 rounded-lg font-semibold transition ${p.is_available ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
                   >
-                    {p.available ? '✓ Disponível' : '✗ Indisponível'}
+                    {p.is_available ? '✓ Disponível' : '✗ Indisponível'}
                   </button>
                 </div>
               ))}
