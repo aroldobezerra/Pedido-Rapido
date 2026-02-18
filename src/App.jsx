@@ -18,6 +18,10 @@ const headers = (extra = {}) => ({
   ...extra,
 });
 
+/**
+ * Monta URL do Supabase REST com query params opcionais.
+ * params: { select, eq:{column,value}, limit, order:{column,ascending} }
+ */
 const buildURL = (table, params = {}) => {
   const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
   if (params.select) url.searchParams.set('select', params.select);
@@ -29,25 +33,43 @@ const buildURL = (table, params = {}) => {
 
 const apiFetch = async (table, params = {}) => {
   const res = await fetch(buildURL(table, params), { headers: headers() });
-  if (!res.ok) {
-    const json = await res.json().catch(() => ({}));
-    throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
-  }
   const json = await res.json();
+  if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
   return Array.isArray(json) ? json : [];
 };
 
+/**
+ * INSERT — retorna o registro criado ou lança erro com detalhes do Supabase.
+ */
 const apiInsert = async (table, row) => {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
     method: 'POST',
     headers: headers({ 'Prefer': 'return=representation' }),
+    body: JSON.stringify(row), // row = objeto único, não array
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    const msg = json?.message || json?.error || JSON.stringify(json);
+    throw new Error(msg);
+  }
+  // Supabase retorna array quando Prefer: return=representation
+  return Array.isArray(json) ? json[0] : json;
+};
+
+/**
+ * UPSERT — útil para criar ou atualizar (evita duplicatas em onConflict).
+ */
+const apiUpsert = async (table, row, onConflict = 'slug') => {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?on_conflict=${onConflict}`, {
+    method: 'POST',
+    headers: headers({ 'Prefer': 'return=representation,resolution=merge-duplicates' }),
     body: JSON.stringify(row),
   });
-  if (!res.ok) {
-    const json = await res.json().catch(() => ({}));
-    throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
-  }
   const json = await res.json();
+  if (!res.ok) {
+    const msg = json?.message || json?.error || JSON.stringify(json);
+    throw new Error(msg);
+  }
   return Array.isArray(json) ? json[0] : json;
 };
 
@@ -65,14 +87,13 @@ const apiUpdate = async (table, column, value, data) => {
 };
 
 const apiDelete = async (table, column, value) => {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${column}=eq.${encodeURIComponent(value)}`, {
+  await fetch(`${SUPABASE_URL}/rest/v1/${table}?${column}=eq.${encodeURIComponent(value)}`, {
     method: 'DELETE',
     headers: headers(),
   });
-  if (!res.ok) throw new Error(`DELETE falhou: ${res.status}`);
 };
 
-// ─── COMPONENTES AUXILIARES ──────────────────────────────────────────────────
+// ─── COMPONENTES BASE ────────────────────────────────────────────────────────
 
 const Overlay = ({ children }) => (
   <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -93,73 +114,59 @@ const LoadingOverlay = ({ text = 'Carregando...' }) => (
   </Overlay>
 );
 
+// Toast simples
 const Toast = ({ msg, type = 'success', onClose }) => {
-  useEffect(() => {
-    const t = setTimeout(onClose, 4000);
-    return () => clearTimeout(t);
-  }, [onClose]);
-
-  const styles = { success: 'bg-green-500', error: 'bg-red-500' };
-  const Icon = type === 'success' ? CheckCircle : XCircle;
-
+  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
+  const styles = {
+    success: 'bg-green-500',
+    error:   'bg-red-500',
+    info:    'bg-blue-500',
+  };
+  const Icon = type === 'success' ? CheckCircle : type === 'error' ? XCircle : AlertTriangle;
   return (
-    <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 px-5 py-3 rounded-2xl text-white shadow-2xl text-sm font-bold max-w-sm w-[90%] ${styles[type]}`}>
+    <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 px-5 py-3 rounded-2xl text-white shadow-2xl text-sm font-bold max-w-sm w-full ${styles[type]}`}>
       <Icon size={18} />
       <span className="flex-1">{msg}</span>
-      <button onClick={onClose} className="text-lg leading-none">×</button>
+      <button onClick={onClose} className="opacity-70 hover:opacity-100 text-lg leading-none">×</button>
     </div>
   );
 };
 
-// ─── APP PRINCIPAL ───────────────────────────────────────────────────────────
+// ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 
 export default function PedidoRapido() {
-  const [view, setView] = useState('loading');
+  const [view, setView]                 = useState('loading');
   const [currentTenant, setCurrentTenant] = useState(null);
-  const [products, setProducts] = useState([]);
-  const [cart, setCart] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState(null);
+  const [products, setProducts]         = useState([]);
+  const [cart, setCart]                 = useState([]);
+  const [loading, setLoading]           = useState(false);
+  const [toast, setToast]               = useState(null); // {msg, type}
 
   const showToast = (msg, type = 'success') => setToast({ msg, type });
 
-  // ── Carregar tenant pela URL ──────────────────────────────────────────────
+  // ── Carregar tenant pela URL ────────────────────────────────────────────
   const loadTenantFromURL = useCallback(async (slug) => {
-    if (!slug) { setView('home'); return; }
+    if (!slug)          { setView('home');      return; }
     if (slug === 'master') { setView('saas-login'); return; }
 
     setLoading(true);
     try {
-      const tenants = await apiFetch('tenants', { eq: { column: 'slug', value: slug } });
-      const tenant = tenants[0];
-      if (!tenant) {
+      const rows = await apiFetch('tenants', { eq: { column: 'slug', value: slug } });
+      const tenant = rows[0] || null;
+      if (tenant) {
+        setCurrentTenant(tenant);
+        const prods = await apiFetch('products', { eq: { column: 'tenant_id', value: tenant.id } });
+        setProducts(prods);
+        setView('menu');
+        if (window.location.pathname !== `/${slug}`)
+          window.history.replaceState({}, '', `/${slug}`);
+      } else {
         window.history.replaceState({}, '', '/');
         setView('home');
-        return;
       }
-
-      setCurrentTenant(tenant);
-
-      let prods = [];
-      try {
-        prods = await apiFetch('products', { 
-          eq: { column: 'tenant_id', value: tenant.id },
-          eq: { column: 'available', value: 'true' }  // aqui pode dar erro se coluna não existir
-        });
-      } catch (err) {
-        console.warn('Erro ao carregar produtos:', err.message);
-        // continua com array vazio
-      }
-
-      setProducts(prods);
-      setView('menu');
-
-      if (window.location.pathname !== `/${slug}`) {
-        window.history.replaceState({}, '', `/${slug}`);
-      }
-    } catch (err) {
-      console.error('Erro ao carregar tenant:', err);
-      showToast('Erro ao carregar a lanchonete', 'error');
+    } catch (e) {
+      console.error('loadTenantFromURL:', e);
+      window.history.replaceState({}, '', '/');
       setView('home');
     } finally {
       setLoading(false);
@@ -167,27 +174,53 @@ export default function PedidoRapido() {
   }, []);
 
   useEffect(() => {
-    const slug = window.location.pathname.split('/').filter(Boolean)[0] || null;
-    loadTenantFromURL(slug);
+    const slug = window.location.pathname.split('/').filter(Boolean)[0];
+    loadTenantFromURL(slug || null);
   }, [loadTenantFromURL]);
 
+  // ── Navegação ───────────────────────────────────────────────────────────
   const go = (newView, slug = null) => {
-    if (slug) window.history.pushState({}, '', `/${slug}`);
+    if (slug)               window.history.pushState({}, '', `/${slug}`);
     else if (newView === 'home') window.history.pushState({}, '', '/');
     setView(newView);
   };
 
-  // ── Criar tenant ──────────────────────────────────────────────────────────
+  // ── Acessar tenant por slug ─────────────────────────────────────────────
+  const accessTenant = async (slug) => {
+    setLoading(true);
+    try {
+      const rows = await apiFetch('tenants', { eq: { column: 'slug', value: slug } });
+      const tenant = rows[0] || null;
+      if (tenant) {
+        setCurrentTenant(tenant);
+        const prods = await apiFetch('products', { eq: { column: 'tenant_id', value: tenant.id } });
+        setProducts(prods);
+        window.history.pushState({}, '', `/${slug}`);
+        setView('menu');
+      } else {
+        showToast('Lanchonete não encontrada!', 'error');
+      }
+    } catch (e) {
+      showToast('Erro ao buscar: ' + e.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Criar tenant ────────────────────────────────────────────────────────
+  // CORRIGIDO: verificação de duplicata + insert com objeto único + tratamento de erro detalhado
   const createTenant = async (name, slug, whatsapp, password) => {
     setLoading(true);
     try {
+      // 1. Verificar se slug já existe
       const existing = await apiFetch('tenants', { eq: { column: 'slug', value: slug } });
       if (existing.length > 0) {
-        showToast('Identificador já em uso. Escolha outro.', 'error');
+        showToast('Identificador já existe! Escolha outro.', 'error');
         return null;
       }
 
-      const newTenant = await apiInsert('tenants', {
+      // 2. Inserir — objeto único (não array)
+      const tenant = await apiInsert('tenants', {
         name,
         slug,
         whatsapp,
@@ -196,77 +229,153 @@ export default function PedidoRapido() {
         created_at: new Date().toISOString(),
       });
 
-      if (!newTenant?.id) throw new Error('Falha na criação');
+      if (!tenant || !tenant.id) throw new Error('Resposta inesperada do servidor.');
 
-      setCurrentTenant(newTenant);
-
-      let prods = [];
-      try {
-        prods = await apiFetch('products', { 
-          eq: { column: 'tenant_id', value: newTenant.id },
-          eq: { column: 'available', value: 'true' }
-        });
-      } catch (err) {
-        console.warn('Produtos não carregados:', err.message);
-      }
-
+      // 3. Sucesso
+      setCurrentTenant(tenant);
+      const prods = await apiFetch('products', { eq: { column: 'tenant_id', value: tenant.id } });
       setProducts(prods);
       window.history.pushState({}, '', `/${slug}`);
       setView('menu');
-      showToast('Lanchonete criada com sucesso! 7 dias grátis.', 'success');
-      return newTenant;
-    } catch (err) {
-      console.error('Erro createTenant:', err);
-      showToast(`Erro ao criar: ${err.message}`, 'error');
+      showToast('✅ Lanchonete criada! 7 dias grátis começam agora.', 'success');
+      return tenant;
+    } catch (e) {
+      console.error('createTenant error:', e);
+      showToast('Erro ao criar: ' + e.message, 'error');
       return null;
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Componente Admin Login (simples) ─────────────────────────────────────
-  const AdminLoginPage = () => {
-    const [pass, setPass] = useState('');
-    const [showPass, setShowPass] = useState(false);
+  const createOrder = async (tenantId, customerName, orderType, tableNumber, items, total) => {
+    await apiInsert('orders', {
+      tenant_id: tenantId,
+      customer_name: customerName,
+      order_type: orderType,
+      table_number: tableNumber,
+      items: JSON.stringify(items),
+      total,
+      status: 'aguardando',
+    });
+  };
 
-    const handleLogin = () => {
-      // Senha fixa por enquanto - mude para variável de ambiente ou auth real
-      if (pass === currentTenant?.password) {
-        go('admin');
-      } else {
-        showToast('Senha incorreta', 'error');
-      }
-    };
+  // ════════════════════════════════════════════════════════════════════════
+  //  VIEWS
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ── HOME ────────────────────────────────────────────────────────────────
+  const HomePage = () => {
+    const [tenants, setTenants] = useState([]);
+    const [fetching, setFetching] = useState(true);
+
+    useEffect(() => {
+      apiFetch('tenants', {
+        select: 'id,name,slug,created_at',
+        limit: 8,
+        order: { column: 'created_at', ascending: false },
+      })
+        .then(setTenants)
+        .catch(() => setTenants([]))
+        .finally(() => setFetching(false));
+    }, []);
 
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center p-4">
-        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8">
-          <button onClick={() => go('menu')} className="mb-6 flex items-center gap-2 text-gray-500 hover:text-gray-700">
+      <div className="min-h-screen bg-gradient-to-br from-orange-100 via-red-50 to-yellow-100 flex flex-col items-center justify-center p-4">
+        {loading && <LoadingOverlay />}
+        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 sm:p-8">
+          {/* Logo */}
+          <div className="text-center mb-8">
+            <div className="flex items-center justify-center gap-3 mb-4">
+              <Zap className="text-orange-500" size={44} />
+              <span className="text-6xl">🍔</span>
+            </div>
+            <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-orange-500 to-red-500 bg-clip-text text-transparent mb-2">
+              Pedido Rápido
+            </h1>
+            <p className="text-gray-500 font-medium text-sm">Sistema Multi-Tenant para Lanchonetes</p>
+            <p className="text-xs text-gray-300 mt-1">Powered by Supabase + Vercel</p>
+          </div>
+
+          <div className="space-y-3 mb-6">
+            <button
+              onClick={() => go('select')}
+              className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white py-4 rounded-2xl font-bold text-base shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              <Store size={20} /> Acessar Minha Lanchonete
+            </button>
+            <button
+              onClick={() => go('register')}
+              className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white py-4 rounded-2xl font-bold text-base shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              ✨ Começar Grátis (7 dias)
+            </button>
+          </div>
+
+          {/* Recentes */}
+          {!fetching && tenants.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 px-1">Lanchonetes recentes</p>
+              <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                {tenants.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => accessTenant(t.slug)}
+                    className="w-full text-left px-4 py-3 bg-orange-50 hover:bg-orange-100 rounded-xl transition-all border border-orange-100 flex items-center justify-between group active:scale-98"
+                  >
+                    <div>
+                      <p className="font-bold text-gray-800 text-sm">{t.name}</p>
+                      <p className="text-xs text-gray-400">/{t.slug}</p>
+                    </div>
+                    <ChevronRight size={16} className="text-orange-400 group-hover:translate-x-1 transition-transform" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-6 text-center">
+            <button
+              onClick={() => go('saas-login')}
+              className="text-xs text-gray-300 hover:text-gray-500 transition flex items-center gap-1 mx-auto"
+            >
+              <Shield size={11} /> Painel Master
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── SELECT ──────────────────────────────────────────────────────────────
+  const SelectPage = () => {
+    const [slug, setSlug] = useState('');
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-orange-100 to-red-100 flex items-center justify-center p-4">
+        {loading && <LoadingOverlay />}
+        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 sm:p-8">
+          <button onClick={() => go('home')} className="mb-6 flex items-center gap-2 text-gray-400 hover:text-orange-500 transition text-sm font-medium">
             <ArrowLeft size={18} /> Voltar
           </button>
           <div className="text-center mb-8">
-            <Lock size={48} className="mx-auto text-orange-500 mb-4" />
-            <h2 className="text-2xl font-bold">Painel Admin</h2>
-            <p className="text-gray-500 text-sm mt-1">{currentTenant?.name}</p>
+            <div className="w-16 h-16 bg-orange-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Store size={32} className="text-orange-500" />
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-bold text-gray-800">Acessar Lanchonete</h2>
+            <p className="text-gray-400 text-sm mt-1">Digite o identificador único</p>
           </div>
-          <div className="relative">
-            <input
-              type={showPass ? 'text' : 'password'}
-              value={pass}
-              onChange={e => setPass(e.target.value)}
-              placeholder="Senha do admin"
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:border-orange-500 outline-none"
-            />
-            <button 
-              onClick={() => setShowPass(!showPass)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
-            >
-              {showPass ? <EyeOff size={20} /> : <Eye size={20} />}
-            </button>
-          </div>
+          <input
+            type="text"
+            value={slug}
+            onChange={e => setSlug(e.target.value.toLowerCase().trim())}
+            onKeyDown={e => e.key === 'Enter' && slug && accessTenant(slug)}
+            placeholder="minha-lanchonete"
+            autoCapitalize="none"
+            className="w-full px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl mb-4 outline-none transition font-medium"
+          />
           <button
-            onClick={handleLogin}
-            className="w-full mt-6 bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-xl font-bold transition"
+            onClick={() => slug && accessTenant(slug)}
+            className="w-full bg-orange-500 hover:bg-orange-600 active:scale-95 text-white py-3.5 rounded-xl font-bold transition-all"
           >
             Entrar
           </button>
@@ -275,124 +384,551 @@ export default function PedidoRapido() {
     );
   };
 
-  // ── Painel Admin (versão mínima) ─────────────────────────────────────────
-  const AdminPage = () => {
+  // ── REGISTER ────────────────────────────────────────────────────────────
+  const RegisterPage = () => {
+    const [form, setForm] = useState({ name: '', slug: '', whatsapp: '', password: '' });
+    const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+    const handleSubmit = async () => {
+      if (!form.name || !form.slug || !form.whatsapp || !form.password) {
+        showToast('Preencha todos os campos!', 'error');
+        return;
+      }
+      if (form.slug.length < 3) {
+        showToast('Identificador muito curto (mín. 3 caracteres)', 'error');
+        return;
+      }
+      await createTenant(form.name, form.slug, form.whatsapp, form.password);
+    };
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-100 to-blue-100 flex items-center justify-center p-4">
+        {loading && <LoadingOverlay text="Criando sua lanchonete..." />}
+        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 sm:p-8">
+          <button onClick={() => go('home')} className="mb-6 flex items-center gap-2 text-gray-400 hover:text-green-500 transition text-sm font-medium">
+            <ArrowLeft size={18} /> Voltar
+          </button>
+          <div className="text-center mb-6">
+            <div className="text-5xl mb-3">🎉</div>
+            <h2 className="text-2xl sm:text-3xl font-bold text-gray-800">Comece Grátis</h2>
+            <p className="text-gray-400 text-sm">7 dias de teste, sem cartão</p>
+          </div>
+          <div className="space-y-3">
+            <input
+              type="text"
+              value={form.name}
+              onChange={e => set('name', e.target.value)}
+              placeholder="Nome da Lanchonete"
+              className="w-full px-4 py-3 border-2 border-gray-200 focus:border-green-400 rounded-xl outline-none transition font-medium"
+            />
+            <div>
+              <input
+                type="text"
+                value={form.slug}
+                onChange={e => set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                placeholder="identificador-unico (ex: comabem)"
+                autoCapitalize="none"
+                className="w-full px-4 py-3 border-2 border-gray-200 focus:border-green-400 rounded-xl outline-none transition font-medium"
+              />
+              {form.slug && (
+                <p className="text-xs text-gray-400 mt-1 px-1">
+                  Link: <span className="text-green-600 font-bold">{window.location.origin}/{form.slug}</span>
+                </p>
+              )}
+            </div>
+            <input
+              type="tel"
+              value={form.whatsapp}
+              onChange={e => set('whatsapp', e.target.value.replace(/[^0-9]/g, ''))}
+              placeholder="WhatsApp com DDD (ex: 5585999999999)"
+              className="w-full px-4 py-3 border-2 border-gray-200 focus:border-green-400 rounded-xl outline-none transition font-medium"
+            />
+            <input
+              type="password"
+              value={form.password}
+              onChange={e => set('password', e.target.value)}
+              placeholder="Senha do Painel Admin"
+              className="w-full px-4 py-3 border-2 border-gray-200 focus:border-green-400 rounded-xl outline-none transition font-medium"
+            />
+            <button
+              onClick={handleSubmit}
+              className="w-full bg-green-500 hover:bg-green-600 active:scale-95 text-white py-4 rounded-xl font-bold transition-all text-base"
+            >
+              🚀 Criar Minha Lanchonete
+            </button>
+          </div>
+          <div className="mt-5 p-4 bg-green-50 rounded-2xl">
+            <p className="text-xs text-gray-400 text-center leading-relaxed">
+              ✓ Sem cartão &nbsp;·&nbsp; ✓ Cancele quando quiser &nbsp;·&nbsp; ✓ Suporte via WhatsApp
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── MENU ────────────────────────────────────────────────────────────────
+  const MenuPage = () => {
     if (!currentTenant) return null;
+    const available  = products.filter(p => p.available);
+    const cartCount  = cart.reduce((s, i) => s + i.qty, 0);
+    const cartTotal  = cart.reduce((s, i) => s + parseFloat(i.price) * i.qty, 0);
 
     return (
       <div className="min-h-screen bg-gray-50">
-        <header className="bg-orange-600 text-white p-4 sticky top-0 z-10 shadow-md">
-          <div className="max-w-5xl mx-auto flex justify-between items-center">
-            <h1 className="font-bold text-xl">Admin • {currentTenant.name}</h1>
-            <button onClick={() => go('menu')} className="bg-white/20 px-4 py-2 rounded-lg">
-              Sair
+        <header className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-4 sticky top-0 z-40 shadow-lg">
+          <div className="max-w-4xl mx-auto flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <Zap size={22} />
+              <div>
+                <h1 className="text-lg font-bold leading-tight">{currentTenant.name}</h1>
+                <p className="text-xs opacity-70">Pedido Rápido</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => go('cart')} className="bg-white/20 hover:bg-white/30 active:scale-95 p-2.5 rounded-xl relative transition">
+                <ShoppingCart size={20} />
+                {cartCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-yellow-400 text-orange-900 text-xs font-black rounded-full w-5 h-5 flex items-center justify-center">
+                    {cartCount}
+                  </span>
+                )}
+              </button>
+              <button onClick={() => go('admin-login')} className="bg-white/20 hover:bg-white/30 active:scale-95 p-2.5 rounded-xl transition">
+                <Lock size={20} />
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-4xl mx-auto p-4 pb-28">
+          {available.length === 0 ? (
+            <div className="text-center py-20 text-gray-400">
+              <Package size={48} className="mx-auto mb-3 opacity-40" />
+              <p className="font-bold">Nenhum produto disponível</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-2">
+              {available.map(p => (
+                <div key={p.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-all">
+                  <div className="text-5xl text-center mb-3">{p.image}</div>
+                  <h3 className="text-base font-bold text-center mb-1">{p.name}</h3>
+                  {p.description && <p className="text-xs text-gray-400 text-center mb-2">{p.description}</p>}
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-xl font-bold text-orange-500">R$ {parseFloat(p.price).toFixed(2)}</span>
+                    <button
+                      onClick={() => {
+                        const ex = cart.find(i => i.id === p.id);
+                        setCart(ex
+                          ? cart.map(i => i.id === p.id ? { ...i, qty: i.qty + 1 } : i)
+                          : [...cart, { ...p, qty: 1 }]
+                        );
+                      }}
+                      className="bg-orange-500 hover:bg-orange-600 active:scale-95 text-white px-3 py-2 rounded-xl flex items-center gap-1 text-sm font-bold transition-all"
+                    >
+                      <Plus size={15} /> Adicionar
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </main>
+
+        {/* Barra flutuante do carrinho */}
+        {cartCount > 0 && (
+          <div className="fixed bottom-4 left-4 right-4 z-40">
+            <button
+              onClick={() => go('cart')}
+              className="w-full bg-orange-500 text-white py-4 rounded-2xl font-bold shadow-xl flex items-center justify-between px-5 active:scale-95 transition-all"
+            >
+              <span className="bg-white/25 px-2.5 py-0.5 rounded-lg text-sm font-bold">{cartCount} {cartCount === 1 ? 'item' : 'itens'}</span>
+              <span>Ver Carrinho</span>
+              <span className="font-black">R$ {cartTotal.toFixed(2)}</span>
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ── CART ────────────────────────────────────────────────────────────────
+  const CartPage = () => {
+    const [name, setName]           = useState('');
+    const [orderType, setOrderType] = useState('local');
+    const [tableNum, setTableNum]   = useState('');
+    const [sending, setSending]     = useState(false);
+    if (!currentTenant) return null;
+    const total = cart.reduce((s, i) => s + parseFloat(i.price) * i.qty, 0);
+
+    const handleSend = async () => {
+      if (!name.trim())                             return showToast('Digite seu nome!', 'error');
+      if (orderType === 'local' && !tableNum.trim()) return showToast('Digite a mesa!', 'error');
+      setSending(true);
+      try {
+        let msg = `🍔 *PEDIDO RÁPIDO*%0A${currentTenant.name}%0A%0A👤 ${name}%0A📍 ${orderType === 'local' ? `Mesa ${tableNum}` : 'Para Viagem'}%0A%0A`;
+        cart.forEach(i => msg += `${i.image} ${i.name} x${i.qty} — R$${(parseFloat(i.price) * i.qty).toFixed(2)}%0A`);
+        msg += `%0A━━━━━━━━━━━━%0A💰 *TOTAL: R$${total.toFixed(2)}*`;
+        await createOrder(currentTenant.id, name, orderType, tableNum, cart, total);
+        window.open(`https://wa.me/${currentTenant.whatsapp}?text=${msg}`, '_blank');
+        setCart([]);
+        showToast('✅ Pedido enviado com sucesso!');
+        go('menu');
+      } catch (e) {
+        showToast('Erro ao enviar: ' + e.message, 'error');
+      } finally {
+        setSending(false);
+      }
+    };
+
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-4 sticky top-0 z-40 shadow-lg">
+          <div className="max-w-4xl mx-auto flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <Zap size={22} />
+              <div>
+                <h1 className="text-lg font-bold leading-tight">Carrinho</h1>
+                <p className="text-xs opacity-70">{currentTenant.name}</p>
+              </div>
+            </div>
+            <button onClick={() => go('menu')} className="bg-white/20 hover:bg-white/30 active:scale-95 p-2.5 rounded-xl transition">
+              <ArrowLeft size={20} />
             </button>
           </div>
         </header>
-        <main className="max-w-5xl mx-auto p-6">
-          <div className="bg-white rounded-xl p-6 shadow">
-            <h2 className="text-xl font-bold mb-4">Painel de Administração</h2>
-            <p className="text-gray-600">
-              Aqui você poderá adicionar/editar produtos, ver pedidos e configurar a loja.<br/>
-              <strong>Funcionalidade em desenvolvimento.</strong>
-            </p>
-            <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="border rounded-lg p-6 text-center">
-                <Package size={48} className="mx-auto mb-4 text-orange-500" />
-                <h3 className="font-bold text-lg">Gerenciar Produtos</h3>
-                <p className="text-gray-500 mt-2">Adicione, edite ou desative itens do cardápio</p>
-              </div>
-              <div className="border rounded-lg p-6 text-center">
-                <ShoppingCart size={48} className="mx-auto mb-4 text-green-500" />
-                <h3 className="font-bold text-lg">Pedidos</h3>
-                <p className="text-gray-500 mt-2">Acompanhe pedidos em tempo real</p>
-              </div>
+
+        <main className="max-w-4xl mx-auto p-4 pb-24">
+          {cart.length === 0 ? (
+            <div className="text-center py-20 text-gray-400">
+              <ShoppingCart size={48} className="mx-auto mb-3 opacity-40" />
+              <p className="font-bold">Carrinho vazio</p>
             </div>
+          ) : (
+            <div className="space-y-4 mb-8">
+              {cart.map(item => (
+                <div key={item.id} className="flex items-center justify-between bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+                  <div className="flex items-center gap-3 flex-1">
+                    <span className="text-4xl">{item.image}</span>
+                    <div>
+                      <p className="font-bold text-sm">{item.name}</p>
+                      <p className="text-xs text-gray-400">R$ {parseFloat(item.price).toFixed(2)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setCart(cart.map(i => i.id === item.id ? { ...i, qty: Math.max(1, i.qty - 1) } : i))} className="p-1 bg-gray-100 rounded-full active:scale-95">
+                      <Minus size={16} className="text-gray-500" />
+                    </button>
+                    <span className="font-bold text-sm min-w-[1rem] text-center">{item.qty}</span>
+                    <button onClick={() => setCart(cart.map(i => i.id === item.id ? { ...i, qty: i.qty + 1 } : i))} className="p-1 bg-gray-100 rounded-full active:scale-95">
+                      <Plus size={16} className="text-gray-500" />
+                    </button>
+                    <button onClick={() => setCart(cart.filter(i => i.id !== item.id))} className="p-1 bg-red-100 rounded-full active:scale-95">
+                      <Trash2 size={16} className="text-red-500" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="bg-white rounded-2xl p-5 shadow-sm mb-5">
+            <h3 className="font-bold text-gray-800 mb-3">Dados do Pedido</h3>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="Seu nome"
+              className="w-full px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl mb-3 outline-none transition font-medium"
+            />
+            <div className="flex gap-3 mb-3">
+              <button
+                onClick={() => setOrderType('local')}
+                className={`flex-1 py-3 rounded-xl font-bold transition ${orderType === 'local' ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600'}`}
+              >
+                Mesa
+              </button>
+              <button
+                onClick={() => setOrderType('viagem')}
+                className={`flex-1 py-3 rounded-xl font-bold transition ${orderType === 'viagem' ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600'}`}
+              >
+                Viagem
+              </button>
+            </div>
+            {orderType === 'local' && (
+              <input
+                type="text"
+                value={tableNum}
+                onChange={e => setTableNum(e.target.value)}
+                placeholder="Número da mesa"
+                className="w-full px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl outline-none transition font-medium"
+              />
+            )}
+          </div>
+
+          <div className="fixed bottom-4 left-4 right-4 z-40">
+            <button
+              onClick={handleSend}
+              disabled={sending || cart.length === 0}
+              className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white py-4 rounded-2xl font-bold shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50"
+            >
+              {sending ? <Spinner size={20} color="text-white" /> : <Send size={20} />}
+              <span>Enviar Pedido</span>
+              <span className="font-black">R$ {total.toFixed(2)}</span>
+            </button>
           </div>
         </main>
       </div>
     );
   };
 
-  // ── Render principal ──────────────────────────────────────────────────────
+  // ── ADMIN LOGIN ─────────────────────────────────────────────────────────
+  const AdminLoginPage = () => {
+    const [pass, setPass] = useState('');
+    const [show, setShow] = useState(false);
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-orange-100 to-red-100 flex items-center justify-center p-4">
+        {loading && <LoadingOverlay />}
+        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 sm:p-8">
+          <button onClick={() => go('menu')} className="mb-6 flex items-center gap-2 text-gray-400 hover:text-orange-500 transition text-sm font-medium">
+            <ArrowLeft size={18} /> Voltar
+          </button>
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-orange-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Lock size={32} className="text-orange-500" />
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-bold text-gray-800">Painel Admin</h2>
+            <p className="text-gray-400 text-sm mt-1">Acesso restrito</p>
+          </div>
+          <div className="relative">
+            <input
+              type={show ? 'text' : 'password'}
+              value={pass}
+              onChange={e => setPass(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && pass === currentTenant.password && go('admin')}
+              placeholder="Senha do admin"
+              className="w-full px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl outline-none transition font-medium pr-10"
+            />
+            <button onClick={() => setShow(!show)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+              {show ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          <button
+            onClick={() => pass === currentTenant.password ? go('admin') : showToast('Senha incorreta!', 'error')}
+            className="w-full bg-orange-500 hover:bg-orange-600 active:scale-95 text-white py-3.5 rounded-xl font-bold transition-all mt-4"
+          >
+            Entrar
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── ADMIN ───────────────────────────────────────────────────────────────
+  const AdminPage = () => {
+    const [wpp, setWpp] = useState(currentTenant.whatsapp);
+    const [saving, setSaving] = useState(false);
+    if (!currentTenant) return null;
+
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-4 sticky top-0 z-40 shadow-lg">
+          <div className="max-w-4xl mx-auto flex justify-between items-center">
+            <div>
+              <h1 className="text-xl font-black text-white">Painel Admin</h1>
+              <p className="text-xs opacity-70">{currentTenant.name}</p>
+            </div>
+            <button onClick={() => go('menu')} className="bg-white/20 hover:bg-white/30 active:scale-95 p-2.5 rounded-xl transition">
+              <ArrowLeft size={20} />
+            </button>
+          </div>
+        </header>
+
+        <main className="max-w-4xl mx-auto p-4 space-y-6">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-white rounded-2xl shadow-sm p-4 text-center">
+              <p className="text-xs text-gray-400 mb-1">Plano</p>
+              <p className="text-xl font-black text-orange-500 capitalize">{currentTenant.plan}</p>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm p-4 text-center">
+              <p className="text-xs text-gray-400 mb-1">Produtos</p>
+              <p className="text-xl font-black text-blue-500">{products.length}</p>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm p-4 text-center">
+              <p className="text-xs text-gray-400 mb-1">Status</p>
+              <p className="text-xl font-black text-green-500">Ativo</p>
+            </div>
+          </div>
+
+          {/* WhatsApp */}
+          <div className="bg-white rounded-2xl shadow-sm p-5">
+            <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+              <Phone size={18} className="text-green-500" /> WhatsApp para Pedidos
+            </h3>
+            <div className="flex gap-3">
+              <input
+                type="tel"
+                value={wpp}
+                onChange={e => setWpp(e.target.value.replace(/[^0-9]/g, ''))}
+                placeholder="5585999999999"
+                className="flex-1 px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl outline-none transition font-medium"
+              />
+              <button
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await apiUpdate('tenants', 'id', currentTenant.id, { whatsapp: wpp });
+                    setCurrentTenant({ ...currentTenant, whatsapp: wpp });
+                    showToast('WhatsApp atualizado!');
+                  } catch (e) {
+                    showToast('Erro: ' + e.message, 'error');
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+                className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-xl font-bold transition active:scale-95"
+              >
+                {saving ? <Spinner size={18} color="text-white" /> : 'Salvar'}
+              </button>
+            </div>
+          </div>
+
+          {/* Produtos */}
+          <div className="bg-white rounded-2xl shadow-sm p-5">
+            <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+              <Package size={18} className="text-blue-500" /> Produtos
+            </h3>
+            {products.length === 0 ? (
+              <p className="text-center text-gray-400 py-6">Nenhum produto cadastrado</p>
+            ) : (
+              <div className="space-y-3">
+                {products.map(p => (
+                  <div key={p.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">{p.image}</span>
+                      <div>
+                        <p className="font-bold">{p.name}</p>
+                        <p className="text-xs text-gray-400">R$ {p.price}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        await apiUpdate('products', 'id', p.id, { available: !p.available });
+                        setProducts(products.map(pr => pr.id === p.id ? { ...pr, available: !pr.available } : pr));
+                      }}
+                      className={`px-4 py-2 rounded-xl font-bold ${p.available ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}`}
+                    >
+                      {p.available ? 'Disponível' : 'Indisponível'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+    );
+  };
+
+  // ── SAAS LOGIN ──────────────────────────────────────────────────────────
+  const SaaSLoginPage = () => {
+    const [pass, setPass] = useState('');
+    const [show, setShow] = useState(false);
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center p-4">
+        {loading && <LoadingOverlay />}
+        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 sm:p-8">
+          <button onClick={() => go('home')} className="mb-6 flex items-center gap-2 text-gray-400 hover:text-gray-600 transition text-sm font-medium">
+            <ArrowLeft size={18} /> Voltar
+          </button>
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Shield size={32} className="text-white" />
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-bold text-gray-800">Painel Master</h2>
+            <p className="text-gray-400 text-sm mt-1">Acesso restrito ao SAAS</p>
+          </div>
+          <div className="relative">
+            <input
+              type={show ? 'text' : 'password'}
+              value={pass}
+              onChange={e => setPass(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && pass === SAAS_PASSWORD && go('saas-dashboard')}
+              placeholder="Senha master"
+              className="w-full px-4 py-3 border-2 border-gray-200 focus:border-gray-400 rounded-xl outline-none transition font-medium pr-10"
+            />
+            <button onClick={() => setShow(!show)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+              {show ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          <button
+            onClick={() => pass === SAAS_PASSWORD ? go('saas-dashboard') : showToast('Senha incorreta!', 'error')}
+            className="w-full bg-gray-800 hover:bg-gray-900 active:scale-95 text-white py-3.5 rounded-xl font-bold transition-all mt-4"
+          >
+            Acessar
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── SAAS DASHBOARD ──────────────────────────────────────────────────────
+  const SaaSDashboard = () => {
+    const [tenants, setTenants] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+      apiFetch('tenants')
+        .then(setTenants)
+        .catch(() => setTenants([]))
+        .finally(() => setLoading(false));
+    }, []);
+
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-gray-800 text-white p-4 sticky top-0 z-10 shadow-md">
+          <div className="max-w-5xl mx-auto flex justify-between items-center">
+            <h1 className="font-bold text-xl">SAAS Dashboard</h1>
+            <button onClick={() => go('home')} className="bg-white/20 px-4 py-2 rounded-lg">
+              Sair
+            </button>
+          </div>
+        </header>
+        <main className="max-w-5xl mx-auto p-6">
+          {loading ? <LoadingOverlay /> : (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold">Tenants Cadastrados ({tenants.length})</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {tenants.map(t => (
+                  <div key={t.id} className="bg-white rounded-xl p-4 shadow">
+                    <h3 className="font-bold">{t.name}</h3>
+                    <p className="text-sm text-gray-600">Slug: {t.slug}</p>
+                    <p className="text-sm text-gray-600">Plan: {t.plan}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  };
+
   return (
     <>
-      {loading && <LoadingOverlay />}
-
       {view === 'loading' && <LoadingOverlay text="Iniciando..." />}
       {view === 'home' && <HomePage />}
+      {view === 'select' && <SelectPage />}
       {view === 'register' && <RegisterPage />}
       {view === 'menu' && <MenuPage />}
+      {view === 'cart' && <CartPage />}
       {view === 'admin-login' && <AdminLoginPage />}
       {view === 'admin' && <AdminPage />}
       {view === 'saas-login' && <SaaSLoginPage />}
       {view === 'saas-dashboard' && <SaaSDashboard />}
-
       {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </>
-  );
-}
-
-// ── Componentes das páginas restantes (adapte conforme necessário) ────────
-
-function HomePage() {
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl shadow-xl p-8 max-w-md w-full text-center">
-        <Zap size={64} className="mx-auto text-orange-500 mb-6" />
-        <h1 className="text-4xl font-bold mb-2">Pedido Rápido</h1>
-        <p className="text-gray-600 mb-8">Cardápio digital para sua lanchonete</p>
-        
-        <div className="space-y-4">
-          <button className="w-full bg-orange-500 text-white py-4 rounded-xl font-bold">
-            Acessar cardápio
-          </button>
-          <button className="w-full bg-green-500 text-white py-4 rounded-xl font-bold">
-            Começar grátis
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RegisterPage() {
-  return (
-    <div className="min-h-screen bg-green-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl shadow-xl p-8 max-w-md w-full">
-        <h2 className="text-3xl font-bold text-center mb-6">Comece Grátis</h2>
-        {/* formulário aqui */}
-        <p className="text-center text-gray-600">Formulário de cadastro em implementação</p>
-      </div>
-    </div>
-  );
-}
-
-function MenuPage() {
-  return (
-    <div className="min-h-screen bg-gray-50 p-4">
-      <h1 className="text-2xl font-bold">Cardápio</h1>
-      <p>Itens do cardápio aparecerão aqui</p>
-    </div>
-  );
-}
-
-function SaaSLoginPage() {
-  return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl p-8 max-w-sm w-full">
-        <h2 className="text-2xl font-bold mb-6 text-center">Painel Master</h2>
-        <p className="text-center">Login master em desenvolvimento</p>
-      </div>
-    </div>
-  );
-}
-
-function SaaSDashboard() {
-  return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      <h1 className="text-3xl font-bold">Dashboard Master</h1>
-      <p>Visão geral da plataforma</p>
-    </div>
   );
 }
