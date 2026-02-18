@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import { Product } from '../types';
 
@@ -40,12 +39,32 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
 
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
+      // ✅ FIX: Supabase retorna 'is_available' (snake_case), mas o TypeScript usa 'isAvailable' (camelCase).
+      // Esta verificação cobre os dois casos para garantir compatibilidade em todos os navegadores.
+      const available = (p as any).is_available !== false && p.isAvailable !== false;
+
       const matchesCategory = String(p.category).toLowerCase() === String(activeCategory).toLowerCase();
-      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          p.description.toLowerCase().includes(searchQuery.toLowerCase());
-      return (p.isAvailable !== false) && matchesCategory && matchesSearch;
+
+      const matchesSearch = !searchQuery || 
+        p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+        (p.description || '').toLowerCase().includes(searchQuery.toLowerCase());
+
+      // ✅ FIX: Quando está buscando, ignora o filtro de categoria para mostrar resultados de todas as categorias
+      if (isSearching && searchQuery) {
+        return available && matchesSearch;
+      }
+
+      return available && matchesCategory && matchesSearch;
     });
-  }, [products, activeCategory, searchQuery]);
+  }, [products, activeCategory, searchQuery, isSearching]);
+
+  // ✅ FIX: Deriva as categorias reais dos produtos disponíveis caso a prop 'categories' esteja vazia
+  const effectiveCategories = useMemo(() => {
+    if (categories && categories.length > 0) return categories;
+    // Fallback: extrai categorias únicas dos próprios produtos
+    const cats = [...new Set(products.map(p => String(p.category)).filter(Boolean))];
+    return cats;
+  }, [categories, products]);
 
   return (
     <div className="flex flex-col min-h-screen pb-32">
@@ -68,7 +87,7 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
           </div>
           <div className="flex items-center gap-2">
             <button 
-              onClick={() => setIsSearching(!isSearching)}
+              onClick={() => { setIsSearching(!isSearching); setSearchQuery(''); }}
               className={`flex h-10 w-10 items-center justify-center rounded-full transition-all shadow-sm ${isSearching ? 'bg-primary text-white' : 'bg-white dark:bg-[#3d2b1d]'}`}
             >
               <span className="material-symbols-outlined text-xl">{isSearching ? 'close' : 'search'}</span>
@@ -89,7 +108,7 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
         )}
         
         <div className="flex overflow-x-auto hide-scrollbar px-4 pb-2 gap-6">
-          {categories.map(cat => (
+          {effectiveCategories.map(cat => (
             <button 
               key={cat}
               onClick={() => setActiveCategory(cat)}
@@ -113,13 +132,15 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
 
       <main className="px-4 space-y-8 mt-6 max-w-lg mx-auto w-full">
         <section className="space-y-4">
-          <h2 className="text-xl font-black tracking-tight px-1">{activeCategory || 'Selecione uma categoria'}</h2>
+          <h2 className="text-xl font-black tracking-tight px-1">
+            {isSearching && searchQuery ? `Resultados para "${searchQuery}"` : (activeCategory || 'Selecione uma categoria')}
+          </h2>
           
           <div className="grid gap-6">
             {filteredProducts.length === 0 ? (
               <div className="py-20 flex flex-col items-center justify-center text-center opacity-40">
                  <span className="material-symbols-outlined text-6xl mb-4">info</span>
-                 <p className="font-bold text-sm">Nenhum produto disponível {activeCategory ? `em ${activeCategory}` : ''} no momento.</p>
+                 <p className="font-bold text-sm">Nenhum produto disponível {!isSearching && activeCategory ? `em ${activeCategory}` : ''} no momento.</p>
               </div>
             ) : (
               filteredProducts.map(product => (
