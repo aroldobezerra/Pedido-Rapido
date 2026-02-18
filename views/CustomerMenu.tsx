@@ -30,26 +30,32 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
 
-  // Inicializa a categoria ativa com a primeira disponível
   useEffect(() => {
     if (categories.length > 0 && !activeCategory) {
       setActiveCategory(categories[0]);
     }
   }, [categories, activeCategory]);
 
+  // ✅ FIX: Fallback para categorias extraídas dos próprios produtos caso a prop chegue vazia
+  const effectiveCategories = useMemo(() => {
+    if (categories && categories.length > 0) return categories;
+    const cats = [...new Set(products.map(p => String(p.category)).filter(Boolean))];
+    return cats;
+  }, [categories, products]);
+
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
-      // ✅ FIX: Supabase retorna 'is_available' (snake_case), mas o TypeScript usa 'isAvailable' (camelCase).
-      // Esta verificação cobre os dois casos para garantir compatibilidade em todos os navegadores.
+      // ✅ FIX: Supabase retorna 'is_available' (snake_case), TypeScript usa 'isAvailable' (camelCase).
+      // Cobre os dois casos para funcionar em todos os navegadores.
       const available = (p as any).is_available !== false && p.isAvailable !== false;
 
       const matchesCategory = String(p.category).toLowerCase() === String(activeCategory).toLowerCase();
 
-      const matchesSearch = !searchQuery || 
-        p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      const matchesSearch = !searchQuery ||
+        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (p.description || '').toLowerCase().includes(searchQuery.toLowerCase());
 
-      // ✅ FIX: Quando está buscando, ignora o filtro de categoria para mostrar resultados de todas as categorias
+      // Quando buscando, ignora filtro de categoria
       if (isSearching && searchQuery) {
         return available && matchesSearch;
       }
@@ -57,14 +63,6 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
       return available && matchesCategory && matchesSearch;
     });
   }, [products, activeCategory, searchQuery, isSearching]);
-
-  // ✅ FIX: Deriva as categorias reais dos produtos disponíveis caso a prop 'categories' esteja vazia
-  const effectiveCategories = useMemo(() => {
-    if (categories && categories.length > 0) return categories;
-    // Fallback: extrai categorias únicas dos próprios produtos
-    const cats = [...new Set(products.map(p => String(p.category)).filter(Boolean))];
-    return cats;
-  }, [categories, products]);
 
   return (
     <div className="flex flex-col min-h-screen pb-32">
@@ -126,7 +124,7 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
 
       {!isOpen && (
         <div className="bg-red-500 text-white text-[10px] font-black uppercase tracking-widest py-2 text-center sticky top-[110px] z-40">
-           Lanchonete Fechada no momento. Apenas visualização disponível.
+          Lanchonete Fechada no momento. Apenas visualização disponível.
         </div>
       )}
 
@@ -139,8 +137,8 @@ const CustomerMenu: React.FC<CustomerMenuProps> = ({
           <div className="grid gap-6">
             {filteredProducts.length === 0 ? (
               <div className="py-20 flex flex-col items-center justify-center text-center opacity-40">
-                 <span className="material-symbols-outlined text-6xl mb-4">info</span>
-                 <p className="font-bold text-sm">Nenhum produto disponível {!isSearching && activeCategory ? `em ${activeCategory}` : ''} no momento.</p>
+                <span className="material-symbols-outlined text-6xl mb-4">info</span>
+                <p className="font-bold text-sm">Nenhum produto disponível {!isSearching && activeCategory ? `em ${activeCategory}` : ''} no momento.</p>
               </div>
             ) : (
               filteredProducts.map(product => (
