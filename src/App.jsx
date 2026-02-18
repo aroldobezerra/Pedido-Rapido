@@ -21,9 +21,9 @@ const headers = (extra = {}) => ({
 const buildURL = (table, params = {}) => {
   const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
   if (params.select) url.searchParams.set('select', params.select);
-  if (params.eq)     url.searchParams.set(`${params.eq.column}`, `eq.${params.eq.value}`);
-  if (params.limit)  url.searchParams.set('limit', params.limit);
-  if (params.order)  url.searchParams.set('order', `${params.order.column}.${params.order.ascending ? 'asc' : 'desc'}`);
+  if (params.eq) url.searchParams.set(`${params.eq.column}`, `eq.${params.eq.value}`);
+  if (params.limit) url.searchParams.set('limit', params.limit);
+  if (params.order) url.searchParams.set('order', `${params.order.column}.${params.order.ascending ? 'asc' : 'desc'}`);
   return url.toString();
 };
 
@@ -143,12 +143,11 @@ export default function PedidoRapido() {
 
         let prods = [];
         try {
-          // Correção principal: usa store_id em vez de tenant_id
           prods = await apiFetch('products', { eq: { column: 'store_id', value: tenant.id } });
           console.log('[DEBUG] Produtos carregados:', prods.length);
         } catch (prodErr) {
           console.warn('[DEBUG] Erro ao carregar produtos:', prodErr.message);
-          showToast('Não foi possível carregar o cardápio (verifique produtos)', 'error');
+          showToast('Não foi possível carregar o cardápio', 'error');
         }
 
         setProducts(prods || []);
@@ -184,9 +183,47 @@ export default function PedidoRapido() {
     setView(newView);
   };
 
-  // ... (outras funções como createTenant, createOrder, etc. permanecem iguais)
+  // ── HOME PAGE (agora visível e funcional) ────────────────────────────────
+  const HomePage = () => (
+    <div className="min-h-screen bg-gradient-to-br from-orange-50 via-red-50 to-yellow-50 flex flex-col items-center justify-center p-6">
+      <div className="text-center max-w-2xl">
+        <Zap size={96} className="mx-auto text-orange-500 mb-6" />
+        <h1 className="text-5xl sm:text-6xl font-extrabold text-gray-900 mb-4">
+          Pedido Rápido
+        </h1>
+        <p className="text-xl text-gray-700 mb-10">
+          Cardápio digital simples e rápido para sua lanchonete
+        </p>
 
-  // ── MENU (com fallback forte para evitar branco) ────────────────────────
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-md mx-auto">
+          <button
+            onClick={() => go('register')}
+            className="bg-gradient-to-r from-green-500 to-emerald-600 text-white py-5 px-8 rounded-2xl font-bold text-lg shadow-lg hover:brightness-110 transition active:scale-95"
+          >
+            Começar Grátis (7 dias)
+          </button>
+          <button
+            onClick={() => go('select')}
+            className="bg-gradient-to-r from-orange-500 to-red-600 text-white py-5 px-8 rounded-2xl font-bold text-lg shadow-lg hover:brightness-110 transition active:scale-95"
+          >
+            Acessar minha loja
+          </button>
+        </div>
+
+        <p className="mt-12 text-gray-500 text-sm">
+          Já tem uma loja? Digite o identificador (ex: /comabem) na URL
+        </p>
+      </div>
+
+      {/* Rodapé de debug */}
+      <div className="fixed bottom-0 left-0 right-0 bg-black/80 text-white text-xs p-3 text-center z-50 opacity-80">
+        DEBUG | View: {view} | Slug atual: {window.location.pathname.split('/')[1] || '(raiz)'} | 
+        Loja carregada: {currentTenant ? currentTenant.name : 'Nenhuma'}
+      </div>
+    </div>
+  );
+
+  // ── MENU PAGE (com fallback forte) ──────────────────────────────────────
   const MenuPage = () => {
     if (!currentTenant) {
       return (
@@ -249,11 +286,10 @@ export default function PedidoRapido() {
           </div>
         )}
 
-        {/* Rodapé de debug - remova depois de testar */}
+        {/* Rodapé de debug */}
         <div className="fixed bottom-0 left-0 right-0 bg-black/80 text-white text-xs p-3 text-center z-50 opacity-80">
-          DEBUG | Slug: {window.location.pathname.split('/')[1] || '(raiz)'} | 
-          Loja: {currentTenant ? currentTenant.name : 'Nenhuma'} | 
-          View: {view} | Produtos: {products.length}
+          DEBUG | View: {view} | Slug: {window.location.pathname.split('/')[1] || '(raiz)'} | 
+          Loja: {currentTenant ? currentTenant.name : 'Nenhuma'} | Produtos: {products.length}
         </div>
       </div>
     );
@@ -262,12 +298,27 @@ export default function PedidoRapido() {
   // Render principal
   return (
     <>
-      {loading && <LoadingOverlay text="Carregando loja..." />}
+      {loading && <LoadingOverlay text="Carregando..." />}
 
       {view === 'loading' && <LoadingOverlay text="Iniciando..." />}
-      {view === 'home' && <div className="min-h-screen flex items-center justify-center">Home Page (implementar)</div>}
+      {view === 'home' && <HomePage />}
       {view === 'menu' && <MenuPage />}
-      {/* Adicione aqui as outras views conforme necessário: register, cart, admin, etc. */}
+      {/* Adicione aqui as outras views quando precisar: register, cart, admin, etc. */}
+      {/* Exemplo placeholder para register */}
+      {view === 'register' && (
+        <div className="min-h-screen flex items-center justify-center bg-green-50">
+          <div className="text-center p-8 bg-white rounded-2xl shadow-xl max-w-md">
+            <h2 className="text-3xl font-bold mb-6">Registro de Loja</h2>
+            <p className="text-gray-600 mb-8">Implementação em andamento...</p>
+            <button 
+              onClick={() => go('home')}
+              className="bg-orange-500 text-white px-8 py-4 rounded-xl font-bold"
+            >
+              Voltar para Home
+            </button>
+          </div>
+        </div>
+      )}
 
       {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </>
