@@ -11,33 +11,34 @@ const PedidoRapido = () => {
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
   const [loading, setLoading] = useState(false);
-  // Adicione este useEffect logo após os useState no início de PedidoRapido
-useEffect(() => {
-  const params = new URLSearchParams(window.location.search);
-  const slugParam = params.get('s');
-  if (slugParam) {
-    (async () => {
-      const tenant = await getTenant(slugParam);
-      if (tenant) {
-        setCurrentTenant(tenant);
-        setProducts(await getProducts(tenant.id));
-        setView('menu');
-      } else {
-        setView('not-found'); // ou 'home' se não tiver tela de erro
-      }
-    })();
-  }
-}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ✅ FIX 1: Lê o parâmetro ?s= da URL e carrega a lanchonete automaticamente
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const slugParam = params.get('s');
+    if (slugParam) {
+      (async () => {
+        const tenant = await getTenant(slugParam);
+        if (tenant) {
+          setCurrentTenant(tenant);
+          setProducts(await getProducts(tenant.id));
+          setView('menu');
+        } else {
+          setView('not-found');
+        }
+      })();
+    }
+  }, []);
 
   const fetchAPI = async (table, params = {}) => {
     let url = `${SUPABASE_URL}/rest/v1/${table}`;
     const queryParams = [];
-    
+
     if (params.select) queryParams.push(`select=${params.select}`);
     if (params.eq) queryParams.push(`${params.eq.column}=eq.${params.eq.value}`);
     if (params.limit) queryParams.push(`limit=${params.limit}`);
     if (params.order) queryParams.push(`order=${params.order.column}.${params.order.ascending ? 'asc' : 'desc'}`);
-    
+
     if (queryParams.length > 0) url += '?' + queryParams.join('&');
 
     const res = await fetch(url, {
@@ -75,15 +76,16 @@ useEffect(() => {
     });
   };
 
+  // ✅ FIX 2: Trocado 'tenants' por 'stores' e 'password' por 'admin_password'
   const createTenant = async (name, slug, whatsapp, password) => {
     try {
       setLoading(true);
-      const existing = await fetchAPI('tenants', { eq: { column: 'slug', value: slug } });
+      const existing = await fetchAPI('stores', { eq: { column: 'slug', value: slug } });
       if (existing.length > 0) {
         alert('Identificador já existe!');
         return null;
       }
-      const data = await insertAPI('tenants', [{ name, slug, whatsapp, password, plan: 'trial' }]);
+      const data = await insertAPI('stores', [{ name, slug, whatsapp, admin_password: password, is_open: true }]);
       return data[0];
     } catch (err) {
       alert('Erro: ' + err.message);
@@ -93,10 +95,11 @@ useEffect(() => {
     }
   };
 
+  // ✅ FIX 3: Busca na tabela correta 'stores'
   const getTenant = async (slug) => {
     try {
       setLoading(true);
-      const data = await fetchAPI('tenants', { eq: { column: 'slug', value: slug } });
+      const data = await fetchAPI('stores', { eq: { column: 'slug', value: slug } });
       return data[0] || null;
     } catch (err) {
       alert('Erro: ' + err.message);
@@ -108,20 +111,21 @@ useEffect(() => {
 
   const getProducts = async (tenantId) => {
     try {
-      const data = await fetchAPI('products', { eq: { column: 'tenant_id', value: tenantId } });
+      const data = await fetchAPI('products', { eq: { column: 'store_id', value: tenantId } });
       return data || [];
     } catch (err) {
       return [];
     }
   };
 
+  // ✅ FIX 4: Listagem também na tabela 'stores'
   const listTenants = async () => {
     try {
       setLoading(true);
-      const data = await fetchAPI('tenants', { 
-        select: 'id,name,slug', 
-        limit: 10, 
-        order: { column: 'created_at', ascending: false } 
+      const data = await fetchAPI('stores', {
+        select: 'id,name,slug',
+        limit: 10,
+        order: { column: 'created_at', ascending: false }
       });
       return data || [];
     } finally {
@@ -134,12 +138,12 @@ useEffect(() => {
   };
 
   const updateTenant = async (tenantId, updates) => {
-    await updateAPI('tenants', 'id', tenantId, updates);
+    await updateAPI('stores', 'id', tenantId, updates);
   };
 
   const createOrder = async (tenantId, customerName, orderType, tableNumber, items, total) => {
     await insertAPI('orders', [{
-      tenant_id: tenantId,
+      store_id: tenantId,
       customer_name: customerName,
       order_type: orderType,
       table_number: tableNumber,
@@ -148,6 +152,29 @@ useEffect(() => {
       status: 'aguardando'
     }]);
   };
+
+  // ✅ Tela de "Link não encontrado"
+  const NotFoundPage = () => (
+    <div className="min-h-screen bg-gradient-to-br from-orange-100 to-red-100 flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 text-center">
+        <div className="text-6xl mb-4">😕</div>
+        <h2 className="text-2xl font-bold text-gray-800 mb-2">Lanchonete não encontrada</h2>
+        <p className="text-gray-500 text-sm mb-6">Verifique o link e tente novamente.</p>
+        <button
+          onClick={() => setView('home')}
+          className="w-full bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-xl font-bold transition"
+        >
+          Página Inicial
+        </button>
+        <button
+          onClick={() => window.location.reload()}
+          className="w-full mt-3 text-orange-500 hover:text-orange-600 font-semibold py-2 transition"
+        >
+          Tentar Novamente
+        </button>
+      </div>
+    </div>
+  );
 
   const HomePage = () => {
     const [tenants, setTenants] = useState([]);
@@ -501,6 +528,7 @@ useEffect(() => {
     );
   };
 
+  // ✅ FIX 5: Comparação com 'admin_password' em vez de 'password'
   const AdminLoginPage = () => {
     const [pass, setPass] = useState('');
     if (!currentTenant) return null;
@@ -515,16 +543,16 @@ useEffect(() => {
             <Lock className="w-16 h-16 text-purple-500 mx-auto mb-4" />
             <h2 className="text-3xl font-bold">Área Admin</h2>
           </div>
-          <input 
-            type="password" 
-            value={pass} 
-            onChange={(e) => setPass(e.target.value)} 
-            placeholder="Senha de administrador" 
-            className="w-full px-4 py-3 border-2 border-gray-300 focus:border-purple-500 rounded-xl mb-4 outline-none transition" 
+          <input
+            type="password"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            placeholder="Senha de administrador"
+            className="w-full px-4 py-3 border-2 border-gray-300 focus:border-purple-500 rounded-xl mb-4 outline-none transition"
           />
           <button
             onClick={() => {
-              if (pass === currentTenant.password) {
+              if (pass === currentTenant.admin_password) {
                 setView('admin');
               } else {
                 alert('❌ Senha incorreta!');
@@ -550,11 +578,11 @@ useEffect(() => {
             <h1 className="text-4xl font-bold text-gray-800">Painel Admin</h1>
             <button onClick={() => setView('menu')} className="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded-lg transition">Sair</button>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
             <div className="bg-white rounded-xl shadow-lg p-6">
               <p className="text-gray-600 text-sm">Plano Atual</p>
-              <p className="text-3xl font-bold text-purple-500 capitalize">{currentTenant.plan}</p>
+              <p className="text-3xl font-bold text-purple-500 capitalize">{currentTenant.plan || 'trial'}</p>
             </div>
             <div className="bg-white rounded-xl shadow-lg p-6">
               <p className="text-gray-600 text-sm">Total de Produtos</p>
@@ -562,19 +590,19 @@ useEffect(() => {
             </div>
             <div className="bg-white rounded-xl shadow-lg p-6">
               <p className="text-gray-600 text-sm">Status</p>
-              <p className="text-3xl font-bold text-green-500">Ativo</p>
+              <p className="text-3xl font-bold text-green-500">{currentTenant.is_open ? 'Aberto' : 'Fechado'}</p>
             </div>
           </div>
 
           <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
             <h3 className="text-xl font-bold text-gray-800 mb-4">WhatsApp</h3>
             <div className="flex gap-2">
-              <input 
-                type="text" 
-                value={whatsappEdit} 
-                onChange={(e) => setWhatsappEdit(e.target.value.replace(/[^0-9]/g, ''))} 
-                placeholder="5585999999999" 
-                className="flex-1 px-4 py-2 border-2 border-gray-300 focus:border-purple-500 rounded-lg outline-none transition" 
+              <input
+                type="text"
+                value={whatsappEdit}
+                onChange={(e) => setWhatsappEdit(e.target.value.replace(/[^0-9]/g, ''))}
+                placeholder="5585999999999"
+                className="flex-1 px-4 py-2 border-2 border-gray-300 focus:border-purple-500 rounded-lg outline-none transition"
               />
               <button
                 onClick={async () => {
@@ -597,36 +625,38 @@ useEffect(() => {
                   <div className="flex items-center gap-3">
                     <span className="text-3xl">{p.image}</span>
                     <div>
-                      <p className="font-bold text-gray-800">{
-                        p.name}</p>
-<p className="text-sm text-gray-600">R$ {parseFloat(p.price).toFixed(2)}</p>
-</div>
-</div>
-<button
-onClick={async () => {
-const newAvail = !p.available;
-await updateProduct(p.id, { available: newAvail });
-setProducts(products.map(pr => pr.id === p.id ? {...pr, available: newAvail} : pr));
-}}
-className={px-4 py-2 rounded-lg font-semibold transition ${p.available ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}}
->
-{p.available ? '✓ Disponível' : '✗ Indisponível'}
-</button>
-</div>
-))}
-</div>
-</div>
-</div>
-</div>
-);
+                      <p className="font-bold text-gray-800">{p.name}</p>
+                      <p className="text-sm text-gray-600">R$ {parseFloat(p.price).toFixed(2)}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      const newAvail = !p.available;
+                      await updateProduct(p.id, { available: newAvail });
+                      setProducts(products.map(pr => pr.id === p.id ? {...pr, available: newAvail} : pr));
+                    }}
+                    className={`px-4 py-2 rounded-lg font-semibold transition ${p.available ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                  >
+                    {p.available ? '✓ Disponível' : '✗ Indisponível'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  if (view === 'not-found') return <NotFoundPage />;
+  if (view === 'home') return <HomePage />;
+  if (view === 'select') return <SelectPage />;
+  if (view === 'register') return <RegisterPage />;
+  if (view === 'menu') return <MenuPage />;
+  if (view === 'cart') return <CartPage />;
+  if (view === 'admin-login') return <AdminLoginPage />;
+  if (view === 'admin') return <AdminPage />;
+  return null;
 };
-if (view === 'home') return <HomePage />;
-if (view === 'select') return <SelectPage />;
-if (view === 'register') return <RegisterPage />;
-if (view === 'menu') return <MenuPage />;
-if (view === 'cart') return <CartPage />;
-if (view === 'admin-login') return <AdminLoginPage />;
-if (view === 'admin') return <AdminPage />;
-return null;
-};
+
 export default PedidoRapido;
