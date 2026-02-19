@@ -785,18 +785,18 @@ export default function PedidoRapido() {
       if (cart.length === 0) { showToast('Carrinho vazio!', 'error'); return; }
       setSending(true);
       try {
-        // Reutiliza table_number para guardar endereço de entrega (coluna já existente no banco)
-        let locationInfo = '';
-        if (orderType === 'local')   locationInfo = tableNum;
-        if (orderType === 'viagem')  locationInfo = 'Viagem';
-        if (orderType === 'entrega') locationInfo = `${address}${addressRef ? ' | Ref: ' + addressRef : ''}`;
+        // Monta label de localização para incluir em customer_name (evita colunas inexistentes)
+        let locationLabel = '';
+        if (orderType === 'local')   locationLabel = `Mesa ${tableNum}`;
+        if (orderType === 'viagem')  locationLabel = 'Viagem';
+        if (orderType === 'entrega') locationLabel = `Entrega: ${address}${addressRef ? ' | Ref: ' + addressRef : ''}`;
 
+        // Envia apenas colunas que existem na tabela orders
+        // customer_name inclui nome + tipo para exibição na cozinha
         await apiInsert('orders', {
           store_id:      currentTenant.id,
           tenant_id:     currentTenant.id,
-          customer_name: name,
-          order_type:    orderType,
-          table_number:  locationInfo,
+          customer_name: `${name} (${locationLabel})`,
           items:         cart,
           total,
           status:        'aguardando',
@@ -1055,12 +1055,7 @@ export default function PedidoRapido() {
                     <div key={o.id} className="bg-white rounded-2xl p-4 shadow flex justify-between items-center">
                       <div>
                         <p className="font-bold">{o.customer_name}</p>
-                        <p className="text-sm text-gray-500">
-                          R$ {parseFloat(o.total || 0).toFixed(2)} ·{' '}
-                          {o.order_type === 'local'   && `Mesa ${o.table_number}`}
-                          {o.order_type === 'viagem'  && 'Viagem'}
-                          {o.order_type === 'entrega' && `🛵 ${o.table_number || 'Entrega'}`}
-                        </p>
+                        <p className="text-sm text-gray-500">R$ {parseFloat(o.total || 0).toFixed(2)}</p>
                         <p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleString('pt-BR')}</p>
                       </div>
                       <span className={`text-xs font-bold px-3 py-1 rounded-full ${STATUS_COLORS[o.status] || 'bg-gray-100'}`}>{STATUS_LABELS[o.status] || o.status}</span>
@@ -1091,11 +1086,7 @@ export default function PedidoRapido() {
                       <div className="flex justify-between items-start mb-3">
                         <div>
                           <p className="font-extrabold text-lg">{o.customer_name}</p>
-                          <p className="text-sm text-gray-500">
-                            {o.order_type === 'local'   && `🪑 Mesa ${o.table_number}`}
-                            {o.order_type === 'viagem'  && '🛍️ Para viagem'}
-                            {o.order_type === 'entrega' && `🛵 ${o.table_number || 'Endereço não informado'}`}
-                          </p>
+                          <p className="text-sm text-gray-500 max-w-xs truncate">{o.customer_name}</p>
                           <p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleTimeString('pt-BR')}</p>
                         </div>
                         <span className={`text-xs font-bold px-3 py-1 rounded-full ${STATUS_COLORS[o.status] || 'bg-gray-100'}`}>{STATUS_LABELS[o.status] || o.status}</span>
