@@ -1,4 +1,4 @@
- import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Send, Lock, ArrowLeft, Store, Loader,
   Zap, Shield, Eye, EyeOff, Trash, Package, RefreshCw,
@@ -141,14 +141,8 @@ export default function PedidoRapido() {
   // ── Produtos ────────────────────────────────────────────────────
   const reloadProducts = useCallback(async (tenantId) => {
     try {
-      let prods = [];
-      // Tenta tenant_id primeiro, depois store_id
-      for (const col of ['tenant_id', 'store_id']) {
-        try {
-          prods = await apiFetch('products', { eq: { column: col, value: tenantId } });
-          if (prods.length) break;
-        } catch (_) {}
-      }
+      // Usa tenant_id (store_id tem FK inválida para outra tabela)
+      const prods = await apiFetch('products', { eq: { column: 'tenant_id', value: tenantId } });
       setProducts(prods);
     } catch { showToast('Erro ao carregar produtos', 'error'); }
   }, [showToast]);
@@ -783,13 +777,12 @@ export default function PedidoRapido() {
           // description, image, extras, is_available, track_inventory, created_at, tenant_id, available
           const imgVal = pImageUrl || pImage || null;
           await apiInsert('products', {
-            store_id:    currentTenant.id,
-            tenant_id:   currentTenant.id,
-            name:        pName,
-            price:       parseFloat(pPrice),
-            category:    pCategory || 'Geral',
-            description: pDesc     || null,
-            image:       imgVal,
+            tenant_id:    currentTenant.id,  // tenant_id NÃO tem FK — é safe
+            name:         pName,
+            price:        parseFloat(pPrice),
+            category:     pCategory || 'Geral',
+            description:  pDesc     || null,
+            image:        imgVal,
             is_available: true,
             available:    true,
             extras:       [],
