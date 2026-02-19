@@ -785,18 +785,22 @@ export default function PedidoRapido() {
       if (cart.length === 0) { showToast('Carrinho vazio!', 'error'); return; }
       setSending(true);
       try {
-        const deliveryAddress = orderType === 'entrega' ? `${address}${addressRef ? ' - Ref: ' + addressRef : ''}` : null;
+        // Reutiliza table_number para guardar endereço de entrega (coluna já existente no banco)
+        let locationInfo = '';
+        if (orderType === 'local')   locationInfo = tableNum;
+        if (orderType === 'viagem')  locationInfo = 'Viagem';
+        if (orderType === 'entrega') locationInfo = `${address}${addressRef ? ' | Ref: ' + addressRef : ''}`;
+
         await apiInsert('orders', {
-          store_id:         currentTenant.id,
-          tenant_id:        currentTenant.id,
-          customer_name:    name,
-          order_type:       orderType,
-          table_number:     orderType === 'local' ? tableNum : null,
-          delivery_address: deliveryAddress,
-          items:            cart,
+          store_id:      currentTenant.id,
+          tenant_id:     currentTenant.id,
+          customer_name: name,
+          order_type:    orderType,
+          table_number:  locationInfo,
+          items:         cart,
           total,
-          status:           'aguardando',
-          created_at:       new Date().toISOString(),
+          status:        'aguardando',
+          created_at:    new Date().toISOString(),
         });
 
         const wp = currentTenant.whatsapp || currentTenant.phone;
@@ -1055,7 +1059,7 @@ export default function PedidoRapido() {
                           R$ {parseFloat(o.total || 0).toFixed(2)} ·{' '}
                           {o.order_type === 'local'   && `Mesa ${o.table_number}`}
                           {o.order_type === 'viagem'  && 'Viagem'}
-                          {o.order_type === 'entrega' && '🛵 Entrega'}
+                          {o.order_type === 'entrega' && `🛵 ${o.table_number || 'Entrega'}`}
                         </p>
                         <p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleString('pt-BR')}</p>
                       </div>
@@ -1090,7 +1094,7 @@ export default function PedidoRapido() {
                           <p className="text-sm text-gray-500">
                             {o.order_type === 'local'   && `🪑 Mesa ${o.table_number}`}
                             {o.order_type === 'viagem'  && '🛍️ Para viagem'}
-                            {o.order_type === 'entrega' && `🛵 ${o.delivery_address || 'Endereço não informado'}`}
+                            {o.order_type === 'entrega' && `🛵 ${o.table_number || 'Endereço não informado'}`}
                           </p>
                           <p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleTimeString('pt-BR')}</p>
                         </div>
