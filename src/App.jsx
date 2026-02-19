@@ -47,6 +47,19 @@ const apiInsert = async (table, data) => {
   return Array.isArray(json) ? json[0] : json;
 };
 
+// Versão silenciosa: não lança erro, retorna {ok, data, errorMsg}
+const apiInsertSafe = async (table, data) => {
+  const body = Array.isArray(data) ? data : [data];
+  const res  = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: apiHeaders({ 'Prefer': 'return=representation' }),
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  if (!res.ok) return { ok: false, errorMsg: json?.message || json?.error || '' };
+  return { ok: true, data: Array.isArray(json) ? json[0] : json };
+};
+
 const apiUpdate = async (table, column, value, data) => {
   const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
   url.searchParams.set(column, `eq.${value}`);
@@ -805,32 +818,33 @@ export default function PedidoRapido() {
           created_at:    new Date().toISOString(),
         };
 
-        // Usa FK cacheada ou descobre qual coluna existe
-        if (_schemaCache.ordersFk) {
-          // FK já conhecida — insere direto
-          const fk = _schemaCache.ordersFk;
-          await apiInsert('orders', fk === 'none' ? orderPayload : { ...orderPayload, [fk]: currentTenant.id });
-        } else {
-          // Descobre qual FK existe tentando cada opção
-          let inserted = false;
+        // Descobre qual coluna FK existe (usa cache para não repetir)
+        // Usa apiInsertSafe para não lançar erro em colunas inexistentes
+        if (!_schemaCache.ordersFk) {
           for (const fkField of ['store_id', 'tenant_id', 'lanchonete_id', 'restaurante_id']) {
-            try {
-              await apiInsert('orders', { ...orderPayload, [fkField]: currentTenant.id });
-              _schemaCache.ordersFk = fkField; // cacheia para próximas vezes
-              inserted = true;
+            const result = await apiInsertSafe('orders', { ...orderPayload, [fkField]: currentTenant.id });
+            if (result.ok) {
+              _schemaCache.ordersFk = fkField;
               break;
-            } catch (fkErr) {
-              const msg = fkErr.message || '';
-              if (!msg.includes('column') && !msg.includes('schema') && !msg.includes('cache')) {
-                throw fkErr; // erro real (não é coluna inexistente)
-              }
+            }
+            const msg = result.errorMsg || '';
+            // Se o erro não for de coluna inexistente, para aqui (ex: RLS, auth)
+            if (!msg.includes('column') && !msg.includes('schema') && !msg.includes('cache')) {
+              throw new Error(msg);
             }
           }
-          if (!inserted) {
-            // Sem FK — tabela só tem campos básicos
-            await apiInsert('orders', orderPayload);
+          // Se nenhuma FK funcionou, tenta sem FK
+          if (!_schemaCache.ordersFk) {
+            const result = await apiInsertSafe('orders', orderPayload);
+            if (!result.ok) throw new Error(result.errorMsg || 'Erro ao inserir pedido');
             _schemaCache.ordersFk = 'none';
           }
+        } else {
+          // FK já conhecida — insere diretamente
+          const fk = _schemaCache.ordersFk;
+          const payload = fk === 'none' ? orderPayload : { ...orderPayload, [fk]: currentTenant.id };
+          const result = await apiInsertSafe('orders', payload);
+          if (!result.ok) throw new Error(result.errorMsg || 'Erro ao inserir pedido');
         }
 
         const wp = currentTenant.whatsapp || currentTenant.phone;
