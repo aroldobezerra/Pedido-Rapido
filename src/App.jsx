@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Send, Lock, ArrowLeft, Store, Loader,
   Zap, Shield, Eye, EyeOff, Trash, Package, RefreshCw,
@@ -21,17 +21,17 @@ const apiHeaders = (extra = {}) => ({
   ...extra,
 });
 
+// Monta URL de forma segura para o PostgREST do Supabase
 const apiFetch = async (table, params = {}) => {
-  let url = `${SUPABASE_URL}/rest/v1/${table}`;
-  const q = [];
-  if (params.select) q.push(`select=${params.select}`);
-  if (params.eq)     q.push(`${params.eq.column}=eq.${encodeURIComponent(params.eq.value)}`);
-  if (params.limit)  q.push(`limit=${params.limit}`);
-  if (params.order)  q.push(`order=${params.order.column}.${params.order.ascending ? 'asc' : 'desc'}`);
-  if (q.length)      url += '?' + q.join('&');
-  const res  = await fetch(url, { headers: apiHeaders() });
+  const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
+  if (params.select) url.searchParams.set('select', params.select);
+  if (params.eq)     url.searchParams.set(params.eq.column, `eq.${params.eq.value}`);
+  if (params.limit)  url.searchParams.set('limit', String(params.limit));
+  if (params.order)  url.searchParams.set('order', `${params.order.column}.${params.order.ascending ? 'asc' : 'desc'}`);
+
+  const res  = await fetch(url.toString(), { headers: apiHeaders() });
   const json = await res.json();
-  if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(json?.message || json?.hint || json?.error || `HTTP ${res.status}`);
   return Array.isArray(json) ? json : [];
 };
 
@@ -48,10 +48,13 @@ const apiInsert = async (table, data) => {
 };
 
 const apiUpdate = async (table, column, value, data) => {
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/${table}?${column}=eq.${encodeURIComponent(value)}`,
-    { method: 'PATCH', headers: apiHeaders(), body: JSON.stringify(data) }
-  );
+  const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
+  url.searchParams.set(column, `eq.${value}`);
+  const res = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: apiHeaders(),
+    body: JSON.stringify(data),
+  });
   if (!res.ok) {
     const json = await res.json().catch(() => ({}));
     throw new Error(json?.message || `HTTP ${res.status}`);
@@ -60,10 +63,9 @@ const apiUpdate = async (table, column, value, data) => {
 };
 
 const apiDelete = async (table, column, value) => {
-  await fetch(
-    `${SUPABASE_URL}/rest/v1/${table}?${column}=eq.${encodeURIComponent(value)}`,
-    { method: 'DELETE', headers: apiHeaders() }
-  );
+  const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
+  url.searchParams.set(column, `eq.${value}`);
+  await fetch(url.toString(), { method: 'DELETE', headers: apiHeaders() });
 };
 
 // ─── COMPONENTES BASE ────────────────────────────────────────────────────────
@@ -100,39 +102,90 @@ const Toast = ({ msg, type = 'success', onClose }) => {
   );
 };
 
-// ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
+// ─── STATUS helpers ───────────────────────────────────────────────────────────
+const STATUS_COLORS = {
+  aguardando: 'bg-yellow-100 text-yellow-800',
+  pending:    'bg-yellow-100 text-yellow-800',
+  preparing:  'bg-blue-100  text-blue-800',
+  ready:      'bg-green-100 text-green-800',
+  delivered:  'bg-gray-100  text-gray-600',
+  cancelled:  'bg-red-100   text-red-700',
+};
+const STATUS_LABELS = {
+  aguardando: 'Aguardando',
+  pending:    'Pendente',
+  preparing:  'Preparando',
+  ready:      'Pronto ✅',
+  delivered:  'Entregue',
+  cancelled:  'Cancelado',
+};
 
+const orderItems = (o) => {
+  try { return Array.isArray(o.items) ? o.items : JSON.parse(o.items || '[]'); }
+  catch { return []; }
+};
+
+// ════════════════════════════════════════════════════════════════════
+// APP PRINCIPAL
+// Toda a lógica de estado fica aqui — componentes filhos NÃO têm
+// estado global, evitando loops de re-render.
+// ════════════════════════════════════════════════════════════════════
 export default function PedidoRapido() {
+  // ── Estado global ───────────────────────────────────────────────
   const [view, setView]                   = useState('loading');
   const [currentTenant, setCurrentTenant] = useState(null);
   const [products, setProducts]           = useState([]);
   const [cart, setCart]                   = useState([]);
   const [loading, setLoading]             = useState(false);
   const [toast, setToast]                 = useState(null);
+
+  // Admin tenant
   const [tenantAdminAuth, setTenantAdminAuth] = useState(false);
-  const [adminTab, setAdminTab]           = useState('resumo');
-  const [saasAuth, setSaasAuth]           = useState(false);
-  const [tenants, setTenants]             = useState([]);
+  const [adminTab, setAdminTab]               = useState('resumo');
+  const [orders, setOrders]                   = useState([]);
+  const [loadingOrders, setLoadingOrders]     = useState(false);
 
-  const showToast = (msg, type = 'success') => setToast({ msg, type });
+  // Admin master (SaaS)
+  const [saasAuth, setSaasAuth] = useState(false);
+  const [tenants, setTenants]   = useState([]);
 
-  // Suporta campo "available" (original) e "is_available" (variante)
+  const showToast = useCallback((msg, type = 'success') => setToast({ msg, type }), []);
+
+  // Produtos disponíveis — suporta campo "available" ou "is_available"
   const isAvailable = (p) => p.available !== false && p.is_available !== false;
 
-  // Recarrega produtos — tenta tenant_id (original) e store_id (variante)
+  // ── Carregar produtos ───────────────────────────────────────────
+  // USA APENAS store_id (coluna confirmada na tabela products)
   const reloadProducts = useCallback(async (tenantId) => {
     try {
-      let prods = await apiFetch('products', { eq: { column: 'tenant_id', value: tenantId } });
-      if (!prods.length) {
-        prods = await apiFetch('products', { eq: { column: 'store_id', value: tenantId } });
-      }
+      const prods = await apiFetch('products', {
+        eq: { column: 'store_id', value: tenantId },
+      });
       setProducts(prods);
-    } catch {
+    } catch (e) {
       showToast('Erro ao carregar produtos', 'error');
     }
-  }, []);
+  }, [showToast]);
 
-  // ── Carregar tenant pela URL ────────────────────────────────────────
+  // ── Carregar pedidos ────────────────────────────────────────────
+  // USA APENAS store_id (evita o erro 400 de tenant_id inexistente)
+  const loadOrders = useCallback(async (tenantId) => {
+    if (!tenantId) return;
+    setLoadingOrders(true);
+    try {
+      const rows = await apiFetch('orders', {
+        eq:    { column: 'store_id', value: tenantId },
+        order: { column: 'created_at', ascending: false },
+      });
+      setOrders(rows);
+    } catch (e) {
+      showToast('Erro ao carregar pedidos', 'error');
+    } finally {
+      setLoadingOrders(false);
+    }
+  }, [showToast]);
+
+  // ── Carregar tenant pela URL ────────────────────────────────────
   const loadTenantFromURL = useCallback(async (slug) => {
     if (!slug)             { setView('home'); return; }
     if (slug === 'master') { setView('saas-login'); return; }
@@ -158,13 +211,36 @@ export default function PedidoRapido() {
     } finally {
       setLoading(false);
     }
-  }, [reloadProducts]);
+  }, [reloadProducts, showToast]);
 
   useEffect(() => {
     const slug = window.location.pathname.split('/').filter(Boolean)[0] || null;
     loadTenantFromURL(slug);
   }, [loadTenantFromURL]);
 
+  // ── Carregar pedidos quando entra na aba correta ────────────────
+  // useEffect no nível raiz — não causa loop
+  const prevTabRef = useRef('');
+  useEffect(() => {
+    if (!currentTenant || !tenantAdminAuth) return;
+    if (view !== 'tenant-admin') return;
+    if (['resumo', 'cozinha'].includes(adminTab) && prevTabRef.current !== adminTab) {
+      prevTabRef.current = adminTab;
+      loadOrders(currentTenant.id);
+    }
+    if (['resumo', 'cardapio'].includes(adminTab) && prevTabRef.current !== adminTab) {
+      reloadProducts(currentTenant.id);
+    }
+  }, [adminTab, view, tenantAdminAuth, currentTenant, loadOrders, reloadProducts]);
+
+  // Dispara ao entrar no painel admin pela primeira vez
+  useEffect(() => {
+    if (view === 'tenant-admin' && tenantAdminAuth && currentTenant) {
+      prevTabRef.current = '';
+    }
+  }, [view, tenantAdminAuth, currentTenant]);
+
+  // ── Carregar todos os tenants (master) ──────────────────────────
   const loadTenants = useCallback(async () => {
     setLoading(true);
     try {
@@ -175,16 +251,17 @@ export default function PedidoRapido() {
       setTenants(rows);
     } catch { showToast('Erro ao carregar lojas', 'error'); }
     finally  { setLoading(false); }
-  }, []);
+  }, [showToast]);
 
-  const go = (newView, slug = null) => {
+  // ── Navegação ───────────────────────────────────────────────────
+  const go = useCallback((newView, slug = null) => {
     if (slug)               window.history.pushState({}, '', `/${slug}`);
     else if (newView === 'home') window.history.pushState({}, '', '/');
     setView(newView);
-  };
+  }, []);
 
-  // Carrinho
-  const addToCart = (product) => {
+  // ── Carrinho ────────────────────────────────────────────────────
+  const addToCart = useCallback((product) => {
     setCart(prev => {
       const ex = prev.find(i => i.id === product.id);
       return ex
@@ -192,16 +269,26 @@ export default function PedidoRapido() {
         : [...prev, { ...product, qty: 1 }];
     });
     showToast(`${product.name} adicionado! 🛒`);
-  };
+  }, [showToast]);
 
-  const updateQty = (id, delta) =>
-    setCart(prev => prev.map(i => i.id === id ? { ...i, qty: i.qty + delta } : i).filter(i => i.qty > 0));
+  const updateQty = useCallback((id, delta) =>
+    setCart(prev => prev.map(i => i.id === id ? { ...i, qty: i.qty + delta } : i).filter(i => i.qty > 0)),
+  []);
 
   const cartTotal = cart.reduce((s, i) => s + parseFloat(i.price || 0) * i.qty, 0);
   const cartCount = cart.reduce((s, i) => s + i.qty, 0);
 
+  // ── Atualizar status do pedido ──────────────────────────────────
+  const updateOrderStatus = useCallback(async (id, status) => {
+    try {
+      await apiUpdate('orders', 'id', id, { status });
+      setOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
+      showToast('Status atualizado!');
+    } catch { showToast('Erro ao atualizar status', 'error'); }
+  }, [showToast]);
+
   // ════════════════════════════════════════════════════════════════════
-  // HOME PAGE — com lista de lojas recentes + botão master discreto
+  // HOME PAGE
   // ════════════════════════════════════════════════════════════════════
   const HomePage = () => {
     const [recentTenants, setRecentTenants] = useState([]);
@@ -244,16 +331,10 @@ export default function PedidoRapido() {
           </div>
 
           <div className="space-y-4">
-            <button
-              onClick={() => go('select')}
-              className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg transform hover:scale-105 transition"
-            >
+            <button onClick={() => go('select')} className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg transform hover:scale-105 transition">
               🏪 Acessar Minha Lanchonete
             </button>
-            <button
-              onClick={() => go('register')}
-              className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg transform hover:scale-105 transition"
-            >
+            <button onClick={() => go('register')} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg transform hover:scale-105 transition">
               ✨ Começar Grátis (7 dias)
             </button>
           </div>
@@ -263,11 +344,8 @@ export default function PedidoRapido() {
               <p className="text-sm text-gray-600 mb-3 font-semibold">Clientes recentes:</p>
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {recentTenants.map(t => (
-                  <button
-                    key={t.id}
-                    onClick={() => accessTenant(t.slug)}
-                    className="w-full text-left px-4 py-3 bg-gradient-to-r from-gray-50 to-orange-50 hover:from-orange-50 hover:to-red-50 rounded-lg transition border border-gray-200"
-                  >
+                  <button key={t.id} onClick={() => accessTenant(t.slug)}
+                    className="w-full text-left px-4 py-3 bg-gradient-to-r from-gray-50 to-orange-50 hover:from-orange-50 hover:to-red-50 rounded-lg transition border border-gray-200">
                     <p className="font-bold text-gray-800">{t.name}</p>
                     <p className="text-xs text-gray-500">{window.location.origin}/{t.slug}</p>
                   </button>
@@ -277,10 +355,7 @@ export default function PedidoRapido() {
           )}
 
           <div className="mt-8 text-center">
-            <button
-              onClick={() => go('saas-login')}
-              className="text-gray-300 hover:text-gray-500 text-xs flex items-center gap-1 mx-auto transition"
-            >
+            <button onClick={() => go('saas-login')} className="text-gray-300 hover:text-gray-500 text-xs flex items-center gap-1 mx-auto transition">
               <Shield size={12} /> Acesso Master
             </button>
           </div>
@@ -290,7 +365,7 @@ export default function PedidoRapido() {
   };
 
   // ════════════════════════════════════════════════════════════════════
-  // SELECT PAGE — buscar loja por slug
+  // SELECT PAGE
   // ════════════════════════════════════════════════════════════════════
   const SelectPage = () => {
     const [slug, setSlug] = useState('');
@@ -306,9 +381,7 @@ export default function PedidoRapido() {
           await reloadProducts(tenant.id);
           window.history.pushState({}, '', `/${slug}`);
           setView('menu');
-        } else {
-          showToast('Lanchonete não encontrada!', 'error');
-        }
+        } else { showToast('Lanchonete não encontrada!', 'error'); }
       } catch { showToast('Erro ao buscar loja', 'error'); }
       finally  { setLoading(false); }
     };
@@ -322,34 +395,21 @@ export default function PedidoRapido() {
           <div className="text-center mb-8">
             <Store className="w-16 h-16 text-orange-500 mx-auto mb-4" />
             <h2 className="text-3xl font-bold text-gray-800">Acessar Lanchonete</h2>
-            <p className="text-gray-500 text-sm mt-2">Digite o identificador da loja</p>
           </div>
           <div className="flex items-center border-2 border-gray-300 focus-within:border-orange-500 rounded-xl mb-4 overflow-hidden transition">
             <span className="pl-4 text-gray-400 text-xs font-mono whitespace-nowrap">{window.location.origin}/</span>
-            <input
-              type="text"
-              value={slug}
-              onChange={e => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-              onKeyDown={e => e.key === 'Enter' && handleAccess()}
-              placeholder="minha-lanchonete"
-              className="flex-1 px-2 py-3 outline-none text-sm"
-              autoFocus
-            />
+            <input type="text" value={slug} onChange={e => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+              onKeyDown={e => e.key === 'Enter' && handleAccess()} placeholder="minha-lanchonete"
+              className="flex-1 px-2 py-3 outline-none text-sm" autoFocus />
           </div>
-          <button
-            onClick={handleAccess}
-            disabled={loading}
-            className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-xl font-bold transition disabled:opacity-50"
-          >
-            Entrar
-          </button>
+          <button onClick={handleAccess} disabled={loading} className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-xl font-bold transition disabled:opacity-50">Entrar</button>
         </div>
       </div>
     );
   };
 
   // ════════════════════════════════════════════════════════════════════
-  // REGISTER PAGE — criar nova loja
+  // REGISTER PAGE
   // ════════════════════════════════════════════════════════════════════
   const RegisterPage = () => {
     const [name, setName]         = useState('');
@@ -359,33 +419,22 @@ export default function PedidoRapido() {
     const [saving, setSaving]     = useState(false);
 
     const handleCreate = async () => {
-      if (!name || !slug || !whatsapp || !password) {
-        showToast('Preencha todos os campos!', 'error'); return;
-      }
+      if (!name || !slug || !whatsapp || !password) { showToast('Preencha todos os campos!', 'error'); return; }
       setSaving(true);
       try {
         const existing = await apiFetch('tenants', { eq: { column: 'slug', value: slug } });
         if (existing.length > 0) { showToast('Identificador já existe!', 'error'); return; }
-
         const tenant = await apiInsert('tenants', {
-          name, slug,
-          whatsapp, phone: whatsapp,
-          password,
-          plan: 'trial',
-          active: true,
-          created_at: new Date().toISOString(),
+          name, slug, whatsapp, phone: whatsapp, password,
+          plan: 'trial', active: true, created_at: new Date().toISOString(),
         });
-
         setCurrentTenant(tenant);
         setProducts([]);
         window.history.pushState({}, '', `/${slug}`);
         showToast('Conta criada com sucesso! 🎉');
         setView('menu');
-      } catch (e) {
-        showToast(`Erro: ${e.message}`, 'error');
-      } finally {
-        setSaving(false);
-      }
+      } catch (e) { showToast(`Erro: ${e.message}`, 'error'); }
+      finally     { setSaving(false); }
     };
 
     return (
@@ -396,29 +445,18 @@ export default function PedidoRapido() {
           </button>
           <div className="text-center mb-8">
             <div className="text-6xl mb-4">🎉</div>
-            <h2 className="text-3xl font-bold text-gray-800 mb-2">Comece Grátis</h2>
+            <h2 className="text-3xl font-bold mb-2">Comece Grátis</h2>
             <p className="text-gray-600 text-sm">7 dias de teste • Sem cartão de crédito</p>
           </div>
           <div className="space-y-4">
             <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nome da Lanchonete *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-green-500 rounded-xl outline-none transition" />
             <div>
-              <input
-                type="text" value={slug}
-                onChange={e => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-                placeholder="identificador-unico *"
-                className="w-full px-4 py-3 border-2 border-gray-300 focus:border-green-500 rounded-xl outline-none transition"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Seu link: {window.location.origin}/<span className="font-semibold text-green-600">{slug || 'seu-link'}</span>
-              </p>
+              <input type="text" value={slug} onChange={e => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="identificador-unico *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-green-500 rounded-xl outline-none transition" />
+              <p className="text-xs text-gray-500 mt-1">Seu link: {window.location.origin}/<span className="font-semibold text-green-600">{slug || 'seu-link'}</span></p>
             </div>
             <input type="text" value={whatsapp} onChange={e => setWhatsapp(e.target.value.replace(/[^0-9]/g, ''))} placeholder="WhatsApp (5585999999999) *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-green-500 rounded-xl outline-none transition" />
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Senha de Admin *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-green-500 rounded-xl outline-none transition" />
-            <button
-              onClick={handleCreate}
-              disabled={saving}
-              className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-bold text-lg transition disabled:opacity-50 flex items-center justify-center gap-2"
-            >
+            <button onClick={handleCreate} disabled={saving} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-bold text-lg transition disabled:opacity-50 flex items-center justify-center gap-2">
               {saving ? <Spinner size={20} color="text-white" /> : '🚀'}
               {saving ? 'Criando...' : 'Criar Minha Conta'}
             </button>
@@ -429,7 +467,7 @@ export default function PedidoRapido() {
   };
 
   // ════════════════════════════════════════════════════════════════════
-  // SAAS LOGIN (Master)
+  // SAAS LOGIN
   // ════════════════════════════════════════════════════════════════════
   const SaasLoginPage = () => {
     const [pw, setPw]         = useState('');
@@ -438,12 +476,8 @@ export default function PedidoRapido() {
 
     const handleLogin = () => {
       if (pw === SAAS_PASSWORD) {
-        setSaasAuth(true);
-        loadTenants();
-        setView('saas-dashboard');
-      } else {
-        setErr('Senha incorreta');
-      }
+        setSaasAuth(true); loadTenants(); setView('saas-dashboard');
+      } else { setErr('Senha incorreta'); }
     };
 
     return (
@@ -451,37 +485,28 @@ export default function PedidoRapido() {
         <div className="bg-white rounded-3xl p-8 shadow-2xl w-full max-w-sm">
           <div className="text-center mb-8">
             <Shield size={48} className="mx-auto text-orange-500 mb-3" />
-            <h2 className="text-2xl font-extrabold text-gray-900">Master Admin</h2>
+            <h2 className="text-2xl font-extrabold">Master Admin</h2>
             <p className="text-gray-500 text-sm mt-1">Acesso restrito</p>
           </div>
           <div className="relative mb-3">
-            <input
-              type={showPw ? 'text' : 'password'}
-              placeholder="Senha master"
-              value={pw}
+            <input type={showPw ? 'text' : 'password'} placeholder="Senha master" value={pw}
               onChange={e => { setPw(e.target.value); setErr(''); }}
               onKeyDown={e => e.key === 'Enter' && handleLogin()}
-              className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 pr-12 text-sm focus:border-orange-400 outline-none"
-              autoFocus
-            />
+              className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 pr-12 text-sm focus:border-orange-400 outline-none" autoFocus />
             <button onClick={() => setShowPw(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
               {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
           {err && <p className="text-red-500 text-sm mb-3 text-center">{err}</p>}
-          <button onClick={handleLogin} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 transition">
-            Entrar
-          </button>
-          <button onClick={() => go('home')} className="w-full mt-3 text-gray-400 text-sm hover:text-gray-600 flex items-center justify-center gap-1 transition">
-            <ArrowLeft size={14} /> Voltar
-          </button>
+          <button onClick={handleLogin} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 transition">Entrar</button>
+          <button onClick={() => go('home')} className="w-full mt-3 text-gray-400 text-sm hover:text-gray-600 flex items-center justify-center gap-1 transition"><ArrowLeft size={14} /> Voltar</button>
         </div>
       </div>
     );
   };
 
   // ════════════════════════════════════════════════════════════════════
-  // SAAS DASHBOARD (Master)
+  // SAAS DASHBOARD
   // ════════════════════════════════════════════════════════════════════
   const SaasDashboard = () => {
     const [showModal, setShowModal] = useState(false);
@@ -497,13 +522,11 @@ export default function PedidoRapido() {
       setSaving(true);
       try {
         await apiInsert('tenants', {
-          name: newName,
-          slug: newSlug.toLowerCase().replace(/\s+/g, '-'),
+          name: newName, slug: newSlug.toLowerCase().replace(/\s+/g, '-'),
           whatsapp: newPhone, phone: newPhone,
           password: newPw || 'admin123',
           trial_expires_at: newExpiry || null,
-          active: true,
-          created_at: new Date().toISOString(),
+          active: true, created_at: new Date().toISOString(),
         });
         showToast('Loja criada!');
         setShowModal(false);
@@ -548,9 +571,9 @@ export default function PedidoRapido() {
         <div className="max-w-4xl mx-auto p-6">
           <div className="grid grid-cols-3 gap-4 mb-6">
             {[
-              { label: 'Total',   value: tenants.length,                        color: 'text-orange-500' },
-              { label: 'Ativas',  value: tenants.filter(t => t.active).length,  color: 'text-green-500'  },
-              { label: 'Inativas',value: tenants.filter(t => !t.active).length, color: 'text-red-500'    },
+              { label:'Total',    value: tenants.length,                        color:'text-orange-500' },
+              { label:'Ativas',   value: tenants.filter(t => t.active).length,  color:'text-green-500'  },
+              { label:'Inativas', value: tenants.filter(t => !t.active).length, color:'text-red-500'    },
             ].map(s => (
               <div key={s.label} className="bg-white rounded-2xl p-4 shadow text-center">
                 <p className={`text-3xl font-extrabold ${s.color}`}>{s.value}</p>
@@ -567,8 +590,7 @@ export default function PedidoRapido() {
             {loading ? <div className="flex justify-center py-12"><Spinner size={40} /></div> :
              tenants.length === 0 ? (
               <div className="text-center py-12 text-gray-400">
-                <Store size={48} className="mx-auto mb-3 opacity-30" />
-                <p>Nenhuma loja cadastrada</p>
+                <Store size={48} className="mx-auto mb-3 opacity-30" /><p>Nenhuma loja</p>
               </div>
             ) : tenants.map(t => (
               <div key={t.id} className="bg-white rounded-2xl p-4 shadow flex items-center gap-4">
@@ -621,7 +643,7 @@ export default function PedidoRapido() {
   };
 
   // ════════════════════════════════════════════════════════════════════
-  // MENU PAGE — com botão Admin no header (igual ao original)
+  // MENU PAGE
   // ════════════════════════════════════════════════════════════════════
   const MenuPage = () => {
     const [showAdminLogin, setShowAdminLogin] = useState(false);
@@ -637,10 +659,9 @@ export default function PedidoRapido() {
         setTenantAdminAuth(true);
         setShowAdminLogin(false);
         setAdminTab('resumo');
+        prevTabRef.current = '';
         setView('tenant-admin');
-      } else {
-        setAdminErr('Senha incorreta');
-      }
+      } else { setAdminErr('Senha incorreta'); }
     };
 
     return (
@@ -661,11 +682,7 @@ export default function PedidoRapido() {
                   <span className="absolute -top-2 -right-2 bg-yellow-400 text-orange-900 text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">{cartCount}</span>
                 )}
               </button>
-              <button
-                onClick={() => tenantAdminAuth ? setView('tenant-admin') : setShowAdminLogin(true)}
-                className="bg-orange-600 hover:bg-orange-700 p-3 rounded-xl transition"
-                title="Área Admin"
-              >
+              <button onClick={() => tenantAdminAuth ? setView('tenant-admin') : setShowAdminLogin(true)} className="bg-orange-600 hover:bg-orange-700 p-3 rounded-xl transition" title="Área Admin">
                 <Lock size={20} />
               </button>
             </div>
@@ -678,8 +695,8 @@ export default function PedidoRapido() {
           ) : available.length === 0 ? (
             <div className="text-center py-20 text-gray-500">
               <Package size={80} className="mx-auto mb-4 opacity-30" />
-              <h2 className="text-2xl font-bold mb-2">Cardápio vazio no momento</h2>
-              <p className="mb-6 text-sm">Estamos preparando novidades para você!</p>
+              <h2 className="text-2xl font-bold mb-2">Cardápio vazio</h2>
+              <p className="mb-6 text-sm">Nenhum item disponível no momento.</p>
               <button onClick={() => reloadProducts(currentTenant.id)} className="px-6 py-3 bg-orange-500 text-white rounded-xl font-bold hover:bg-orange-600 transition">
                 <RefreshCw size={16} className="inline mr-2" />Atualizar
               </button>
@@ -707,23 +724,15 @@ export default function PedidoRapido() {
           <Overlay>
             <div className="bg-white rounded-3xl p-6 shadow-2xl w-full max-w-sm">
               <div className="flex justify-between items-center mb-5">
-                <h3 className="text-xl font-extrabold flex items-center gap-2">
-                  <Lock size={20} className="text-orange-500" /> Admin da Loja
-                </h3>
+                <h3 className="text-xl font-extrabold flex items-center gap-2"><Lock size={20} className="text-orange-500" /> Admin da Loja</h3>
                 <button onClick={() => { setShowAdminLogin(false); setAdminErr(''); }} className="text-gray-400 hover:text-gray-700"><X size={22} /></button>
               </div>
-              <input
-                type="password" placeholder="Senha de administrador"
-                value={adminPw}
+              <input type="password" placeholder="Senha de administrador" value={adminPw}
                 onChange={e => { setAdminPw(e.target.value); setAdminErr(''); }}
                 onKeyDown={e => e.key === 'Enter' && handleAdminLogin()}
-                className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none mb-3"
-                autoFocus
-              />
+                className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none mb-3" autoFocus />
               {adminErr && <p className="text-red-500 text-sm mb-3">{adminErr}</p>}
-              <button onClick={handleAdminLogin} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 transition">
-                Entrar
-              </button>
+              <button onClick={handleAdminLogin} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 transition">Entrar</button>
             </div>
           </Overlay>
         )}
@@ -732,7 +741,7 @@ export default function PedidoRapido() {
   };
 
   // ════════════════════════════════════════════════════════════════════
-  // CART PAGE — local/viagem, mesa, WhatsApp + Supabase (original + melhorias)
+  // CART PAGE
   // ════════════════════════════════════════════════════════════════════
   const CartPage = () => {
     const [name, setName]           = useState('');
@@ -747,13 +756,10 @@ export default function PedidoRapido() {
       if (!name.trim()) { showToast('Digite seu nome!', 'error'); return; }
       if (orderType === 'local' && !tableNum.trim()) { showToast('Digite o número da mesa!', 'error'); return; }
       if (cart.length === 0) { showToast('Carrinho vazio!', 'error'); return; }
-
       setSending(true);
       try {
-        // Salva no Supabase — compatível com tenant_id e store_id
         await apiInsert('orders', {
-          tenant_id: currentTenant.id,
-          store_id:  currentTenant.id,
+          store_id: currentTenant.id,
           customer_name: name,
           order_type: orderType,
           table_number: tableNum,
@@ -763,7 +769,6 @@ export default function PedidoRapido() {
           created_at: new Date().toISOString(),
         });
 
-        // Envia por WhatsApp se tiver número
         const wp = currentTenant.whatsapp || currentTenant.phone;
         if (wp) {
           let msg = `🍔 PEDIDO RÁPIDO - ${currentTenant.name}%0A%0A`;
@@ -777,19 +782,14 @@ export default function PedidoRapido() {
         setCart([]);
         showToast('Pedido enviado! 🎉');
         setView('menu');
-      } catch (e) {
-        showToast(`Erro: ${e.message}`, 'error');
-      } finally {
-        setSending(false);
-      }
+      } catch (e) { showToast(`Erro: ${e.message}`, 'error'); }
+      finally     { setSending(false); }
     };
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50">
         <header className="bg-gradient-to-r from-orange-500 to-red-500 text-white p-4 shadow-lg">
-          <button onClick={() => go('menu')} className="flex items-center gap-2 mb-2 hover:opacity-80 transition">
-            <ArrowLeft size={20} /> Voltar ao Cardápio
-          </button>
+          <button onClick={() => go('menu')} className="flex items-center gap-2 mb-2 hover:opacity-80 transition"><ArrowLeft size={20} /> Voltar ao Cardápio</button>
           <h1 className="text-3xl font-bold">Seu Carrinho</h1>
         </header>
 
@@ -837,11 +837,7 @@ export default function PedidoRapido() {
                   <span className="text-xl font-bold">Total</span>
                   <span className="text-3xl font-bold text-orange-500">R$ {total.toFixed(2)}</span>
                 </div>
-                <button
-                  onClick={handleSend}
-                  disabled={sending}
-                  className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition disabled:opacity-50"
-                >
+                <button onClick={handleSend} disabled={sending} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition disabled:opacity-50">
                   {sending ? <Spinner size={22} color="text-white" /> : <Send size={22} />}
                   {sending ? 'Enviando...' : (currentTenant.whatsapp || currentTenant.phone) ? 'Enviar via WhatsApp' : 'Confirmar Pedido'}
                 </button>
@@ -854,41 +850,23 @@ export default function PedidoRapido() {
   };
 
   // ════════════════════════════════════════════════════════════════════
-  // TENANT ADMIN — abas: Resumo, Cozinha, Cardápio, Ajustes
+  // TENANT ADMIN — sem estado local de pedidos/produtos (usa estado raiz)
   // ════════════════════════════════════════════════════════════════════
   const TenantAdminPage = () => {
-    const [orders, setOrders]           = useState([]);
-    const [loadingData, setLoadingData] = useState(false);
+    // Produto form
     const [showProductModal, setShowProductModal] = useState(false);
-    const [editProduct, setEditProduct] = useState(null);
-    const [pName, setPName]   = useState('');
-    const [pPrice, setPPrice] = useState('');
-    const [pDesc, setPDesc]   = useState('');
-    const [pImage, setPImage] = useState('');
+    const [editProduct, setEditProduct]           = useState(null);
+    const [pName, setPName]     = useState('');
+    const [pPrice, setPPrice]   = useState('');
+    const [pDesc, setPDesc]     = useState('');
+    const [pImage, setPImage]   = useState('');
     const [pSaving, setPSaving] = useState(false);
 
-    useEffect(() => {
-      if (['cozinha','resumo'].includes(adminTab))  loadOrders();
-      if (['cardapio','resumo'].includes(adminTab)) reloadProducts(currentTenant.id);
-    }, [adminTab]);
-
-    const loadOrders = async () => {
-      setLoadingData(true);
-      try {
-        let rows = await apiFetch('orders', { eq: { column: 'tenant_id', value: currentTenant.id }, order: { column: 'created_at', ascending: false } });
-        if (!rows.length) rows = await apiFetch('orders', { eq: { column: 'store_id', value: currentTenant.id }, order: { column: 'created_at', ascending: false } });
-        setOrders(rows);
-      } catch { showToast('Erro ao carregar pedidos', 'error'); }
-      finally  { setLoadingData(false); }
-    };
-
-    const updateOrderStatus = async (id, status) => {
-      try {
-        await apiUpdate('orders', 'id', id, { status });
-        setOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
-        showToast('Status atualizado!');
-      } catch { showToast('Erro', 'error'); }
-    };
+    // Ajustes form
+    const [ajNome, setAjNome]         = useState(currentTenant?.name     || '');
+    const [ajWpp, setAjWpp]           = useState(currentTenant?.whatsapp || currentTenant?.phone || '');
+    const [ajPw, setAjPw]             = useState('');
+    const [ajSaving, setAjSaving]     = useState(false);
 
     const openNewProduct = () => {
       setEditProduct(null); setPName(''); setPPrice(''); setPDesc(''); setPImage('');
@@ -908,7 +886,7 @@ export default function PedidoRapido() {
           showToast('Produto atualizado!');
         } else {
           await apiInsert('products', {
-            tenant_id: currentTenant.id, store_id: currentTenant.id,
+            store_id: currentTenant.id,
             name: pName, price: parseFloat(pPrice), description: pDesc, image: pImage,
             available: true, created_at: new Date().toISOString(),
           });
@@ -938,8 +916,17 @@ export default function PedidoRapido() {
       } catch { showToast('Erro', 'error'); }
     };
 
-    const STATUS_COLORS = { aguardando:'bg-yellow-100 text-yellow-800', pending:'bg-yellow-100 text-yellow-800', preparing:'bg-blue-100 text-blue-800', ready:'bg-green-100 text-green-800', delivered:'bg-gray-100 text-gray-600', cancelled:'bg-red-100 text-red-700' };
-    const STATUS_LABELS = { aguardando:'Aguardando', pending:'Pendente', preparing:'Preparando', ready:'Pronto ✅', delivered:'Entregue', cancelled:'Cancelado' };
+    const saveAjustes = async () => {
+      setAjSaving(true);
+      try {
+        const data = { name: ajNome, whatsapp: ajWpp, phone: ajWpp };
+        if (ajPw.trim()) data.password = ajPw;
+        await apiUpdate('tenants', 'id', currentTenant.id, data);
+        setCurrentTenant(prev => ({ ...prev, ...data }));
+        showToast('Configurações salvas!');
+      } catch (e) { showToast(`Erro: ${e.message}`, 'error'); }
+      finally     { setAjSaving(false); }
+    };
 
     const TABS = [
       { id:'resumo',   label:'Resumo',   Icon: LayoutDashboard },
@@ -948,13 +935,9 @@ export default function PedidoRapido() {
       { id:'ajustes',  label:'Ajustes',  Icon: Settings        },
     ];
 
-    const orderItems = (o) => {
-      try { return Array.isArray(o.items) ? o.items : JSON.parse(o.items || '[]'); }
-      catch { return []; }
-    };
-
     return (
       <div className="min-h-screen bg-gray-100 pb-24">
+        {/* Header */}
         <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white p-4 shadow-lg">
           <div className="max-w-5xl mx-auto flex justify-between items-center">
             <div>
@@ -968,10 +951,12 @@ export default function PedidoRapido() {
           </div>
         </div>
 
+        {/* Tabs */}
         <div className="bg-white border-b sticky top-0 z-20 shadow-sm">
           <div className="max-w-5xl mx-auto flex overflow-x-auto">
             {TABS.map(({ id, label, Icon }) => (
-              <button key={id} onClick={() => setAdminTab(id)} className={`flex items-center gap-2 px-5 py-4 text-sm font-bold whitespace-nowrap border-b-2 transition ${adminTab === id ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+              <button key={id} onClick={() => setAdminTab(id)}
+                className={`flex items-center gap-2 px-5 py-4 text-sm font-bold whitespace-nowrap border-b-2 transition ${adminTab === id ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
                 <Icon size={17} /> {label}
               </button>
             ))}
@@ -980,15 +965,15 @@ export default function PedidoRapido() {
 
         <div className="max-w-5xl mx-auto px-4 py-6">
 
-          {/* RESUMO */}
+          {/* ── RESUMO ── */}
           {adminTab === 'resumo' && (
             <div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
                 {[
-                  { label:'Total Pedidos', value: orders.length,                                                        color:'text-orange-500' },
+                  { label:'Total Pedidos', value: orders.length,                                                          color:'text-orange-500' },
                   { label:'Aguardando',    value: orders.filter(o => ['pending','aguardando'].includes(o.status)).length, color:'text-yellow-500' },
-                  { label:'Entregues',     value: orders.filter(o => o.status === 'delivered').length,                  color:'text-green-500'  },
-                  { label:'Itens Ativos',  value: products.filter(isAvailable).length,                                  color:'text-blue-500'   },
+                  { label:'Entregues',     value: orders.filter(o => o.status === 'delivered').length,                   color:'text-green-500'  },
+                  { label:'Itens Ativos',  value: products.filter(isAvailable).length,                                   color:'text-blue-500'   },
                 ].map(s => (
                   <div key={s.label} className="bg-white rounded-2xl p-4 shadow text-center">
                     <p className={`text-3xl font-extrabold ${s.color}`}>{s.value}</p>
@@ -997,7 +982,7 @@ export default function PedidoRapido() {
                 ))}
               </div>
               <h3 className="font-bold text-gray-700 mb-3">Últimos pedidos</h3>
-              {loadingData ? <div className="flex justify-center py-8"><Spinner /></div> : (
+              {loadingOrders ? <div className="flex justify-center py-8"><Spinner /></div> : (
                 <div className="space-y-3">
                   {orders.slice(0, 6).map(o => (
                     <div key={o.id} className="bg-white rounded-2xl p-4 shadow flex justify-between items-center">
@@ -1009,29 +994,28 @@ export default function PedidoRapido() {
                       <span className={`text-xs font-bold px-3 py-1 rounded-full ${STATUS_COLORS[o.status] || 'bg-gray-100'}`}>{STATUS_LABELS[o.status] || o.status}</span>
                     </div>
                   ))}
-                  {orders.length === 0 && <p className="text-center text-gray-400 py-8">Nenhum pedido ainda</p>}
+                  {orders.length === 0 && !loadingOrders && <p className="text-center text-gray-400 py-8">Nenhum pedido ainda</p>}
                 </div>
               )}
             </div>
           )}
 
-          {/* COZINHA */}
+          {/* ── COZINHA ── */}
           {adminTab === 'cozinha' && (
             <div>
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-extrabold">Pedidos em Tempo Real</h2>
-                <button onClick={loadOrders} className="text-orange-500 hover:text-orange-600 p-2 hover:bg-orange-50 rounded-lg transition"><RefreshCw size={20} /></button>
+                <button onClick={() => loadOrders(currentTenant.id)} className="text-orange-500 hover:text-orange-600 p-2 hover:bg-orange-50 rounded-lg transition"><RefreshCw size={20} /></button>
               </div>
-              {loadingData ? <div className="flex justify-center py-12"><Spinner size={40} /></div> :
+              {loadingOrders ? <div className="flex justify-center py-12"><Spinner size={40} /></div> :
                orders.length === 0 ? (
                 <div className="text-center py-16 text-gray-400">
-                  <ClipboardList size={56} className="mx-auto mb-3 opacity-30" />
-                  <p>Nenhum pedido ainda</p>
+                  <ClipboardList size={56} className="mx-auto mb-3 opacity-30" /><p>Nenhum pedido ainda</p>
                 </div>
               ) : (
                 <div className="space-y-4">
                   {orders.map(o => (
-                    <div key={o.id} className={`bg-white rounded-2xl p-5 shadow border-l-4 ${ ['pending','aguardando'].includes(o.status) ? 'border-yellow-400' : o.status === 'preparing' ? 'border-blue-400' : o.status === 'ready' ? 'border-green-400' : 'border-gray-200' }`}>
+                    <div key={o.id} className={`bg-white rounded-2xl p-5 shadow border-l-4 ${['pending','aguardando'].includes(o.status) ? 'border-yellow-400' : o.status === 'preparing' ? 'border-blue-400' : o.status === 'ready' ? 'border-green-400' : 'border-gray-200'}`}>
                       <div className="flex justify-between items-start mb-3">
                         <div>
                           <p className="font-extrabold text-lg">{o.customer_name}</p>
@@ -1052,8 +1036,8 @@ export default function PedidoRapido() {
                         <span className="font-bold text-orange-600">R$ {parseFloat(o.total || 0).toFixed(2)}</span>
                         <div className="flex gap-2 flex-wrap">
                           {['pending','aguardando'].includes(o.status) && <button onClick={() => updateOrderStatus(o.id,'preparing')} className="bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-600 transition">Preparar</button>}
-                          {o.status === 'preparing' && <button onClick={() => updateOrderStatus(o.id,'ready')} className="bg-green-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-600 transition">Pronto! ✅</button>}
-                          {o.status === 'ready' && <button onClick={() => updateOrderStatus(o.id,'delivered')} className="bg-gray-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-700 transition">Entregue</button>}
+                          {o.status === 'preparing'  && <button onClick={() => updateOrderStatus(o.id,'ready')}     className="bg-green-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-600 transition">Pronto! ✅</button>}
+                          {o.status === 'ready'      && <button onClick={() => updateOrderStatus(o.id,'delivered')} className="bg-gray-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-700 transition">Entregue</button>}
                           {!['cancelled','delivered'].includes(o.status) && <button onClick={() => updateOrderStatus(o.id,'cancelled')} className="bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-200 transition">Cancelar</button>}
                         </div>
                       </div>
@@ -1064,7 +1048,7 @@ export default function PedidoRapido() {
             </div>
           )}
 
-          {/* CARDÁPIO */}
+          {/* ── CARDÁPIO ── */}
           {adminTab === 'cardapio' && (
             <div>
               <div className="flex justify-between items-center mb-4">
@@ -1076,8 +1060,7 @@ export default function PedidoRapido() {
 
               {products.length === 0 ? (
                 <div className="text-center py-16 text-gray-400">
-                  <Package size={56} className="mx-auto mb-3 opacity-30" />
-                  <p>Nenhum produto cadastrado</p>
+                  <Package size={56} className="mx-auto mb-3 opacity-30" /><p>Nenhum produto cadastrado</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -1127,57 +1110,37 @@ export default function PedidoRapido() {
             </div>
           )}
 
-          {/* AJUSTES */}
-          {adminTab === 'ajustes' && <AjustesTab />}
-        </div>
-      </div>
-    );
-  };
-
-  const AjustesTab = () => {
-    const [name, setName]         = useState(currentTenant?.name     || '');
-    const [whatsapp, setWhatsapp] = useState(currentTenant?.whatsapp || currentTenant?.phone || '');
-    const [pw, setPw]             = useState('');
-    const [saving, setSaving]     = useState(false);
-
-    const save = async () => {
-      setSaving(true);
-      try {
-        const data = { name, whatsapp, phone: whatsapp };
-        if (pw.trim()) data.password = pw;
-        await apiUpdate('tenants', 'id', currentTenant.id, data);
-        setCurrentTenant(prev => ({ ...prev, ...data }));
-        showToast('Configurações salvas!');
-      } catch (e) { showToast(`Erro: ${e.message}`, 'error'); }
-      finally     { setSaving(false); }
-    };
-
-    return (
-      <div className="max-w-md">
-        <h2 className="text-lg font-extrabold text-gray-800 mb-5">Ajustes da Loja</h2>
-        <div className="bg-white rounded-2xl p-5 shadow space-y-4">
-          <div>
-            <label className="text-sm font-bold text-gray-600 block mb-1">Nome da Loja</label>
-            <input value={name} onChange={e => setName(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
-          </div>
-          <div>
-            <label className="text-sm font-bold text-gray-600 block mb-1">WhatsApp (com DDI: 5585999999999)</label>
-            <input value={whatsapp} onChange={e => setWhatsapp(e.target.value.replace(/[^0-9]/g, ''))} placeholder="5585999999999" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
-          </div>
-          <div>
-            <label className="text-sm font-bold text-gray-600 block mb-1">Nova senha admin (em branco = não altera)</label>
-            <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="Nova senha" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
-          </div>
-          <div>
-            <label className="text-sm font-bold text-gray-600 block mb-1">Link do cardápio</label>
-            <div className="bg-gray-50 rounded-xl px-4 py-3 text-sm text-orange-600 font-mono break-all select-all">
-              {window.location.origin}/{currentTenant?.slug}
+          {/* ── AJUSTES ── */}
+          {adminTab === 'ajustes' && (
+            <div className="max-w-md">
+              <h2 className="text-lg font-extrabold text-gray-800 mb-5">Ajustes da Loja</h2>
+              <div className="bg-white rounded-2xl p-5 shadow space-y-4">
+                <div>
+                  <label className="text-sm font-bold text-gray-600 block mb-1">Nome da Loja</label>
+                  <input value={ajNome} onChange={e => setAjNome(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
+                </div>
+                <div>
+                  <label className="text-sm font-bold text-gray-600 block mb-1">WhatsApp (com DDI: 5585999999999)</label>
+                  <input value={ajWpp} onChange={e => setAjWpp(e.target.value.replace(/[^0-9]/g, ''))} placeholder="5585999999999" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
+                </div>
+                <div>
+                  <label className="text-sm font-bold text-gray-600 block mb-1">Nova senha admin (em branco = não altera)</label>
+                  <input type="password" value={ajPw} onChange={e => setAjPw(e.target.value)} placeholder="Nova senha" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
+                </div>
+                <div>
+                  <label className="text-sm font-bold text-gray-600 block mb-1">Link do cardápio</label>
+                  <div className="bg-gray-50 rounded-xl px-4 py-3 text-sm text-orange-600 font-mono break-all select-all">
+                    {window.location.origin}/{currentTenant?.slug}
+                  </div>
+                </div>
+                <button onClick={saveAjustes} disabled={ajSaving} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 transition disabled:opacity-50 flex items-center justify-center gap-2">
+                  {ajSaving ? <Spinner size={18} color="text-white" /> : <CheckCircle size={18} />}
+                  Salvar Alterações
+                </button>
+              </div>
             </div>
-          </div>
-          <button onClick={save} disabled={saving} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 transition disabled:opacity-50 flex items-center justify-center gap-2">
-            {saving ? <Spinner size={18} color="text-white" /> : <CheckCircle size={18} />}
-            Salvar Alterações
-          </button>
+          )}
+
         </div>
       </div>
     );
@@ -1190,15 +1153,15 @@ export default function PedidoRapido() {
     <>
       {loading && !['menu','tenant-admin','saas-dashboard'].includes(view) && <LoadingOverlay text="Carregando..." />}
 
-      {view === 'loading'         && <LoadingOverlay text="Iniciando..." />}
-      {view === 'home'            && <HomePage />}
-      {view === 'select'          && <SelectPage />}
-      {view === 'register'        && <RegisterPage />}
-      {view === 'saas-login'      && <SaasLoginPage />}
-      {view === 'saas-dashboard'  && <SaasDashboard />}
-      {view === 'menu'            && <MenuPage />}
-      {view === 'cart'            && <CartPage />}
-      {view === 'tenant-admin'    && <TenantAdminPage />}
+      {view === 'loading'        && <LoadingOverlay text="Iniciando..." />}
+      {view === 'home'           && <HomePage />}
+      {view === 'select'         && <SelectPage />}
+      {view === 'register'       && <RegisterPage />}
+      {view === 'saas-login'     && <SaasLoginPage />}
+      {view === 'saas-dashboard' && <SaasDashboard />}
+      {view === 'menu'           && <MenuPage />}
+      {view === 'cart'           && <CartPage />}
+      {view === 'tenant-admin'   && <TenantAdminPage />}
 
       {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </>
