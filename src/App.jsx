@@ -771,6 +771,8 @@ export default function PedidoRapido() {
     const [name, setName]           = useState('');
     const [orderType, setOrderType] = useState('local');
     const [tableNum, setTableNum]   = useState('');
+    const [address, setAddress]     = useState('');
+    const [addressRef, setAddressRef] = useState('');
     const [sending, setSending]     = useState(false);
 
     if (!currentTenant) return null;
@@ -779,26 +781,34 @@ export default function PedidoRapido() {
     const handleSend = async () => {
       if (!name.trim()) { showToast('Digite seu nome!', 'error'); return; }
       if (orderType === 'local' && !tableNum.trim()) { showToast('Digite o número da mesa!', 'error'); return; }
+      if (orderType === 'entrega' && !address.trim()) { showToast('Digite o endereço de entrega!', 'error'); return; }
       if (cart.length === 0) { showToast('Carrinho vazio!', 'error'); return; }
       setSending(true);
       try {
+        const deliveryAddress = orderType === 'entrega' ? `${address}${addressRef ? ' - Ref: ' + addressRef : ''}` : null;
         await apiInsert('orders', {
-          store_id:  currentTenant.id,
-          tenant_id: currentTenant.id,
-          customer_name: name,
-          order_type: orderType,
-          table_number: tableNum,
-          items: cart,
+          store_id:         currentTenant.id,
+          tenant_id:        currentTenant.id,
+          customer_name:    name,
+          order_type:       orderType,
+          table_number:     orderType === 'local' ? tableNum : null,
+          delivery_address: deliveryAddress,
+          items:            cart,
           total,
-          status: 'aguardando',
-          created_at: new Date().toISOString(),
+          status:           'aguardando',
+          created_at:       new Date().toISOString(),
         });
 
         const wp = currentTenant.whatsapp || currentTenant.phone;
         if (wp) {
+          let loc = '';
+          if (orderType === 'local')   loc = `🪑 Mesa ${tableNum}`;
+          if (orderType === 'viagem')  loc = `🛍️ Para viagem`;
+          if (orderType === 'entrega') loc = `🛵 Entrega: ${address}${addressRef ? ' | Ref: ' + addressRef : ''}`;
+
           let msg = `🍔 PEDIDO RÁPIDO - ${currentTenant.name}%0A%0A`;
           msg += `👤 ${name}%0A`;
-          msg += `📍 ${orderType === 'local' ? `Mesa ${tableNum}` : 'Para viagem'}%0A%0A`;
+          msg += `📍 ${loc}%0A%0A`;
           cart.forEach(i => { msg += `${i.image || '🍔'} ${i.name} - ${i.qty}x R$${parseFloat(i.price).toFixed(2)}%0A`; });
           msg += `%0A💰 TOTAL: R$${total.toFixed(2)}`;
           window.open(`https://wa.me/${wp}?text=${msg}`, '_blank');
@@ -847,13 +857,40 @@ export default function PedidoRapido() {
 
               <div className="bg-white rounded-2xl shadow-lg p-6">
                 <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Seu nome *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl mb-4 outline-none transition" />
-                <div className="flex gap-3 mb-4">
-                  {[['local','🪑 Local'],['viagem','🛍️ Viagem']].map(([val, label]) => (
-                    <button key={val} onClick={() => setOrderType(val)} className={`flex-1 py-3 rounded-xl font-semibold transition ${orderType === val ? 'bg-orange-500 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}>{label}</button>
+
+                {/* Tipo de pedido */}
+                <div className="flex gap-2 mb-4">
+                  {[['local','🪑 Local'],['viagem','🛍️ Viagem'],['entrega','🛵 Entrega']].map(([val, label]) => (
+                    <button key={val} onClick={() => setOrderType(val)}
+                      className={`flex-1 py-3 rounded-xl font-semibold text-sm transition ${orderType === val ? 'bg-orange-500 text-white shadow-md' : 'bg-gray-200 hover:bg-gray-300'}`}>
+                      {label}
+                    </button>
                   ))}
                 </div>
+
+                {/* Campo mesa */}
                 {orderType === 'local' && (
-                  <input type="text" value={tableNum} onChange={e => setTableNum(e.target.value)} placeholder="Número da mesa *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl outline-none transition" />
+                  <input type="text" value={tableNum} onChange={e => setTableNum(e.target.value)}
+                    placeholder="Número da mesa *"
+                    className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl outline-none transition" />
+                )}
+
+                {/* Campos entrega */}
+                {orderType === 'entrega' && (
+                  <div className="space-y-3">
+                    <div className="relative">
+                      <input type="text" value={address} onChange={e => setAddress(e.target.value)}
+                        placeholder="Rua, número, bairro *"
+                        className="w-full px-4 py-3 border-2 border-orange-300 focus:border-orange-500 rounded-xl outline-none transition" />
+                    </div>
+                    <input type="text" value={addressRef} onChange={e => setAddressRef(e.target.value)}
+                      placeholder="Ponto de referência (opcional)"
+                      className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl outline-none transition" />
+                    <div className="flex items-start gap-2 bg-orange-50 border border-orange-200 rounded-xl px-4 py-3">
+                      <span className="text-lg">🛵</span>
+                      <p className="text-xs text-orange-700">O valor da taxa de entrega será combinado diretamente com a loja via WhatsApp.</p>
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -1014,7 +1051,12 @@ export default function PedidoRapido() {
                     <div key={o.id} className="bg-white rounded-2xl p-4 shadow flex justify-between items-center">
                       <div>
                         <p className="font-bold">{o.customer_name}</p>
-                        <p className="text-sm text-gray-500">R$ {parseFloat(o.total || 0).toFixed(2)} · {o.order_type === 'local' ? `Mesa ${o.table_number}` : 'Viagem'}</p>
+                        <p className="text-sm text-gray-500">
+                          R$ {parseFloat(o.total || 0).toFixed(2)} ·{' '}
+                          {o.order_type === 'local'   && `Mesa ${o.table_number}`}
+                          {o.order_type === 'viagem'  && 'Viagem'}
+                          {o.order_type === 'entrega' && '🛵 Entrega'}
+                        </p>
                         <p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleString('pt-BR')}</p>
                       </div>
                       <span className={`text-xs font-bold px-3 py-1 rounded-full ${STATUS_COLORS[o.status] || 'bg-gray-100'}`}>{STATUS_LABELS[o.status] || o.status}</span>
@@ -1045,7 +1087,11 @@ export default function PedidoRapido() {
                       <div className="flex justify-between items-start mb-3">
                         <div>
                           <p className="font-extrabold text-lg">{o.customer_name}</p>
-                          <p className="text-sm text-gray-500">{o.order_type === 'local' ? `🪑 Mesa ${o.table_number}` : '🛍️ Viagem'}</p>
+                          <p className="text-sm text-gray-500">
+                            {o.order_type === 'local'   && `🪑 Mesa ${o.table_number}`}
+                            {o.order_type === 'viagem'  && '🛍️ Para viagem'}
+                            {o.order_type === 'entrega' && `🛵 ${o.delivery_address || 'Endereço não informado'}`}
+                          </p>
                           <p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleTimeString('pt-BR')}</p>
                         </div>
                         <span className={`text-xs font-bold px-3 py-1 rounded-full ${STATUS_COLORS[o.status] || 'bg-gray-100'}`}>{STATUS_LABELS[o.status] || o.status}</span>
