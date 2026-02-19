@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Send, Lock, ArrowLeft, Store, Loader,
   Zap, Shield, Eye, EyeOff, Trash, Package, RefreshCw,
@@ -690,19 +690,20 @@ export default function PedidoRapido() {
     const [showProductModal, setShowProductModal] = useState(false);
     const [editProduct, setEditProduct]           = useState(null);
     const [pName, setPName] = useState(''); const [pPrice, setPPrice] = useState('');
-    const [pDesc, setPDesc]       = useState('');
-    const [pImage, setPImage]     = useState('');   // emoji
-    const [pImageUrl, setPImageUrl] = useState(''); // URL real após upload/conversão
+    const [pDesc, setPDesc]         = useState('');
+    const [pCategory, setPCategory] = useState('Geral');
+    const [pImage, setPImage]       = useState('');   // emoji
+    const [pImageUrl, setPImageUrl] = useState('');   // URL real após upload/conversão
     const [pUploading, setPUploading] = useState(false);
-    const [pSaving, setPSaving]   = useState(false);
+    const [pSaving, setPSaving]     = useState(false);
     const [ajNome, setAjNome]     = useState(currentTenant?.name || '');
     const [ajWpp, setAjWpp]       = useState(currentTenant?.whatsapp || currentTenant?.phone || '');
     const [ajPw, setAjPw]         = useState('');
     const [ajSaving, setAjSaving] = useState(false);
 
-    const openNewProduct = () => { setEditProduct(null); setPName(''); setPPrice(''); setPDesc(''); setPImage(''); setPImageUrl(''); setShowProductModal(true); };
+    const openNewProduct = () => { setEditProduct(null); setPName(''); setPPrice(''); setPDesc(''); setPCategory('Geral'); setPImage(''); setPImageUrl(''); setShowProductModal(true); };
     const openEditProduct = (p) => {
-      setEditProduct(p); setPName(p.name); setPPrice(String(p.price)); setPDesc(p.description||'');
+      setEditProduct(p); setPName(p.name); setPPrice(String(p.price)); setPDesc(p.description||''); setPCategory(p.category || 'Geral');
       const img = p.image_url || p.image || '';
       // se é URL real, coloca em pImageUrl; se é emoji, coloca em pImage
       if (img.startsWith('http') || img.startsWith('data:')) { setPImageUrl(img); setPImage(''); }
@@ -769,31 +770,30 @@ export default function PedidoRapido() {
       try {
         if (editProduct) {
           const imgVal = pImageUrl || pImage || null;
-          await apiUpdate('products', 'id', editProduct.id, { name: pName, price: parseFloat(pPrice), description: pDesc, image: imgVal, image_url: imgVal });
+          await apiUpdate('products', 'id', editProduct.id, {
+            name:        pName,
+            price:       parseFloat(pPrice),
+            category:    pCategory || 'Geral',
+            description: pDesc || null,
+            image:       imgVal,
+          });
         } else {
-          // Descobre qual coluna FK de products existe
-          const prodBase = { name: pName, price: parseFloat(pPrice), description: pDesc || null, available: true, created_at: new Date().toISOString() };
-          // Tenta com image_url, depois image (nome varia por banco)
-          if (pImageUrl) { prodBase.image_url = pImageUrl; prodBase.image = pImageUrl; }
-          else if (pImage) { prodBase.image = pImage; }
-          // Tenta inserir com tenant_id e store_id simultaneamente (um deles vai funcionar)
-          let prodSaved = false;
-          for (const fkVariant of [
-            { ...prodBase, tenant_id: currentTenant.id, store_id: currentTenant.id },
-            { ...prodBase, store_id: currentTenant.id },
-            { ...prodBase, tenant_id: currentTenant.id },
-            prodBase,
-          ]) {
-            try {
-              await apiInsert('products', fkVariant);
-              prodSaved = true;
-              break;
-            } catch (e) {
-              const msg = e.message || '';
-              if (!msg.includes('column') && !msg.includes('schema') && !msg.includes('cache') && !msg.includes('violates')) throw e;
-            }
-          }
-          if (!prodSaved) throw new Error('Não foi possível salvar o produto');
+          // Schema exato confirmado da tabela products:
+          // id(auto), store_id, name(NOT NULL), price(NOT NULL), category(NOT NULL),
+          // description, image, extras, is_available, track_inventory, created_at, tenant_id, available
+          const imgVal = pImageUrl || pImage || null;
+          await apiInsert('products', {
+            store_id:    currentTenant.id,
+            tenant_id:   currentTenant.id,
+            name:        pName,
+            price:       parseFloat(pPrice),
+            category:    pCategory || 'Geral',
+            description: pDesc     || null,
+            image:       imgVal,
+            is_available: true,
+            available:    true,
+            extras:       [],
+          });
         }
         showToast(editProduct ? 'Produto atualizado!' : 'Produto criado!');
         setShowProductModal(false); reloadProducts(currentTenant.id);
@@ -942,7 +942,14 @@ export default function PedidoRapido() {
                     <div className="flex justify-between items-center mb-5"><h3 className="text-xl font-extrabold">{editProduct?'Editar Produto':'Novo Produto'}</h3><button onClick={()=>setShowProductModal(false)} className="text-gray-400 hover:text-gray-700"><X size={22} /></button></div>
                     <div className="space-y-3">
                       <input placeholder="Nome do produto *" value={pName} onChange={e=>setPName(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
-                      <input placeholder="Preço (ex: 15.90) *" value={pPrice} onChange={e=>setPPrice(e.target.value)} type="number" step="0.01" min="0" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
+                      <div className="flex gap-2">
+                        <input placeholder="Preço (ex: 15.90) *" value={pPrice} onChange={e=>setPPrice(e.target.value)} type="number" step="0.01" min="0" className="flex-1 border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
+                        <select value={pCategory} onChange={e=>setPCategory(e.target.value)} className="flex-1 border-2 border-gray-200 rounded-xl px-3 py-3 text-sm focus:border-orange-400 outline-none bg-white">
+                          {['Geral','Lanches','Bebidas','Sobremesas','Porções','Combos','Vegano','Outros'].map(c=>(
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                      </div>
                       <textarea placeholder="Descrição (opcional)" value={pDesc} onChange={e=>setPDesc(e.target.value)} rows={2} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none resize-none" />
                       {/* Upload de imagem real */}
                       <div className="space-y-2">
