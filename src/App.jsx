@@ -580,14 +580,15 @@ export default function PedidoRapido() {
         if (orderType === 'viagem')  loc = 'Viagem';
         if (orderType === 'entrega') loc = `Entrega: ${address}${addressRef ? ' | ' + addressRef : ''}`;
 
-        // ── INSERT COM store_id (coluna criada pelo SQL acima) ──
+        // ── INSERT — inclui delivery_method que é NOT NULL na tabela ──
         await apiInsert('orders', {
-          store_id:      currentTenant.id,
-          customer_name: `${name} (${loc})`,
-          items:         cart,
+          store_id:        currentTenant.id,
+          customer_name:   `${name} (${loc})`,
+          items:           cart,
           total,
-          status:        'aguardando',
-          created_at:    new Date().toISOString(),
+          status:          'aguardando',
+          delivery_method: orderType,   // 'local' | 'viagem' | 'entrega'
+          created_at:      new Date().toISOString(),
         });
 
         // WhatsApp
@@ -778,7 +779,15 @@ export default function PedidoRapido() {
                   {orders.map(o => (
                     <div key={o.id} className={`bg-white rounded-2xl p-5 shadow border-l-4 ${['pending','aguardando'].includes(o.status)?'border-yellow-400':o.status==='preparing'?'border-blue-400':o.status==='ready'?'border-green-400':'border-gray-200'}`}>
                       <div className="flex justify-between items-start mb-3">
-                        <div><p className="font-extrabold text-lg">{o.customer_name}</p><p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleTimeString('pt-BR')}</p></div>
+                        <div>
+                          <p className="font-extrabold text-lg">{o.customer_name}</p>
+                          <p className="text-sm text-gray-500">
+                            {o.delivery_method === 'local'   && '🪑 Local'}
+                            {o.delivery_method === 'viagem'  && '🛍️ Viagem'}
+                            {o.delivery_method === 'entrega' && '🛵 Entrega'}
+                          </p>
+                          <p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleTimeString('pt-BR')}</p>
+                        </div>
                         <span className={`text-xs font-bold px-3 py-1 rounded-full ${STATUS_COLORS[o.status]||'bg-gray-100'}`}>{STATUS_LABELS[o.status]||o.status}</span>
                       </div>
                       <div className="mb-3 bg-gray-50 rounded-xl p-3 space-y-1">
