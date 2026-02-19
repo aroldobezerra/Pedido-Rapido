@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Send, Lock, ArrowLeft, Store, Loader,
   Zap, Shield, Eye, EyeOff, Trash, Package, RefreshCw,
@@ -152,17 +152,39 @@ export default function PedidoRapido() {
     if (!tenantId) return;
     setLoadingOrders(true);
     try {
+      // Primeiro tenta descobrir qual coluna FK existe na tabela orders
+      // fazendo GET sem filtro para ver as colunas disponíveis
       let rows = [];
-      for (const col of ['store_id', 'tenant_id']) {
+      const colsToTry = ['store_id', 'tenant_id', 'loja_id', 'restaurante_id'];
+      let loaded = false;
+
+      for (const col of colsToTry) {
         try {
-          rows = await apiFetch('orders', {
-            eq:    { column: col, value: tenantId },
-            order: { column: 'created_at', ascending: false },
-          });
-          if (rows.length) break;
+          const res = await fetch(
+            `${SUPABASE_URL}/rest/v1/orders?${col}=eq.${tenantId}&order=created_at.desc`,
+            { headers: apiHeaders() }
+          );
+          if (res.ok) {
+            const json = await res.json();
+            rows = Array.isArray(json) ? json : [];
+            loaded = true;
+            break;
+          }
         } catch (_) {}
       }
-      setOrders(rows);
+
+      // Se nenhuma FK funcionou, carrega tudo (sem filtro por loja)
+      if (!loaded) {
+        try {
+          const res = await fetch(
+            `${SUPABASE_URL}/rest/v1/orders?order=created_at.desc&limit=50`,
+            { headers: apiHeaders() }
+          );
+          if (res.ok) rows = await res.json().catch(() => []);
+        } catch (_) {}
+      }
+
+      setOrders(Array.isArray(rows) ? rows : []);
     } catch { showToast('Erro ao carregar pedidos', 'error'); }
     finally  { setLoadingOrders(false); }
   }, [showToast]);
@@ -580,15 +602,36 @@ export default function PedidoRapido() {
         if (orderType === 'viagem')  loc = 'Viagem';
         if (orderType === 'entrega') loc = `Entrega: ${address}${addressRef ? ' | ' + addressRef : ''}`;
 
-        // INSERT sem store_id (FK problemática) — usa apenas colunas seguras
-        await apiInsert('orders', {
+        // INSERT de pedido — tenta com store_id, depois sem (FK pode ser inválida)
+        const orderPayload = {
           customer_name:   `${name} (${loc})`,
           items:           JSON.stringify(cart),
           total,
           status:          'aguardando',
           delivery_method: orderType,
           created_at:      new Date().toISOString(),
-        });
+        };
+        // Tenta adicionar FK de loja — ignora erro de coluna inexistente
+        let orderInserted = false;
+        for (const variant of [
+          { ...orderPayload, store_id: currentTenant.id },
+          { ...orderPayload, tenant_id: currentTenant.id },
+          orderPayload,
+        ]) {
+          const res = await fetch(`${SUPABASE_URL}/rest/v1/orders`, {
+            method: 'POST',
+            headers: apiHeaders({ 'Prefer': 'return=representation' }),
+            body: JSON.stringify([variant]),
+          });
+          if (res.ok) { orderInserted = true; break; }
+          const err = await res.json().catch(() => ({}));
+          const msg = err?.message || '';
+          // Para apenas se NÃO for erro de coluna/FK inválida
+          if (!msg.includes('column') && !msg.includes('schema') && !msg.includes('cache') && !msg.includes('fkey')) {
+            throw new Error(msg || `HTTP ${res.status}`);
+          }
+        }
+        if (!orderInserted) throw new Error('Não foi possível registrar o pedido');
 
         // WhatsApp
         const wp = currentTenant.whatsapp || currentTenant.phone;
@@ -732,25 +775,33 @@ export default function PedidoRapido() {
           img.src = url;
         });
 
-        // Upload para Supabase Storage bucket "products"
+        // Tenta upload para Supabase Storage, com fallback para base64
         const fileName = `${currentTenant.id}/${Date.now()}.webp`;
         const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/products/${fileName}`, {
           method: 'POST',
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'image/webp', 'x-upsert': 'true' },
           body: webpBlob,
         });
-        if (!uploadRes.ok) {
-          // Se bucket não existe, usa base64 como fallback
-          const reader = new FileReader();
-          reader.onload = e => { setPImageUrl(e.target.result); setPImage(''); };
-          reader.readAsDataURL(webpBlob);
-          showToast('Imagem salva localmente (configure o bucket "products" no Supabase para persistir)', 'warning');
-          return;
+
+        if (uploadRes.ok) {
+          // Storage funcionou — usa URL pública
+          const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/products/${fileName}`;
+          setPImageUrl(publicUrl);
+          setPImage('');
+          showToast('Imagem enviada! ✅');
+        } else {
+          // Storage não configurado — converte para base64 e salva no campo image
+          await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = e => {
+              setPImageUrl(e.target.result);
+              setPImage('');
+              resolve();
+            };
+            reader.readAsDataURL(webpBlob);
+          });
+          showToast('Imagem carregada! ✅ (Para persistir entre sessões, crie o bucket "products" no Supabase Storage)');
         }
-        const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/products/${fileName}`;
-        setPImageUrl(publicUrl);
-        setPImage('');
-        showToast('Imagem enviada! ✅');
       } catch (e) {
         showToast(`Erro no upload: ${e.message}`, 'error');
       } finally {
