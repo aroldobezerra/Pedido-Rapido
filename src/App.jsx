@@ -155,12 +155,24 @@ export default function PedidoRapido() {
   const isAvailable = (p) => p.available !== false && p.is_available !== false;
 
   // ── Carregar produtos ───────────────────────────────────────────
-  // USA APENAS store_id (coluna confirmada na tabela products)
+  // Tenta as duas colunas possíveis: tenant_id e store_id
   const reloadProducts = useCallback(async (tenantId) => {
     try {
-      const prods = await apiFetch('products', {
-        eq: { column: 'store_id', value: tenantId },
-      });
+      // Tenta tenant_id primeiro (estrutura original do projeto)
+      let prods = [];
+      try {
+        prods = await apiFetch('products', { eq: { column: 'tenant_id', value: tenantId } });
+      } catch (_) {
+        prods = [];
+      }
+      // Se não veio nada, tenta store_id
+      if (!prods.length) {
+        try {
+          prods = await apiFetch('products', { eq: { column: 'store_id', value: tenantId } });
+        } catch (_) {
+          prods = [];
+        }
+      }
       setProducts(prods);
     } catch (e) {
       showToast('Erro ao carregar produtos', 'error');
@@ -168,15 +180,27 @@ export default function PedidoRapido() {
   }, [showToast]);
 
   // ── Carregar pedidos ────────────────────────────────────────────
-  // USA APENAS store_id (evita o erro 400 de tenant_id inexistente)
+  // Tenta store_id primeiro; se vazio, tenta tenant_id (silenciosamente)
   const loadOrders = useCallback(async (tenantId) => {
     if (!tenantId) return;
     setLoadingOrders(true);
     try {
-      const rows = await apiFetch('orders', {
-        eq:    { column: 'store_id', value: tenantId },
-        order: { column: 'created_at', ascending: false },
-      });
+      let rows = [];
+      try {
+        rows = await apiFetch('orders', {
+          eq:    { column: 'store_id', value: tenantId },
+          order: { column: 'created_at', ascending: false },
+        });
+      } catch (_) { rows = []; }
+
+      if (!rows.length) {
+        try {
+          rows = await apiFetch('orders', {
+            eq:    { column: 'tenant_id', value: tenantId },
+            order: { column: 'created_at', ascending: false },
+          });
+        } catch (_) { rows = []; }
+      }
       setOrders(rows);
     } catch (e) {
       showToast('Erro ao carregar pedidos', 'error');
@@ -759,7 +783,8 @@ export default function PedidoRapido() {
       setSending(true);
       try {
         await apiInsert('orders', {
-          store_id: currentTenant.id,
+          store_id:  currentTenant.id,
+          tenant_id: currentTenant.id,
           customer_name: name,
           order_type: orderType,
           table_number: tableNum,
@@ -886,7 +911,8 @@ export default function PedidoRapido() {
           showToast('Produto atualizado!');
         } else {
           await apiInsert('products', {
-            store_id: currentTenant.id,
+            tenant_id: currentTenant.id,
+            store_id:  currentTenant.id,
             name: pName, price: parseFloat(pPrice), description: pDesc, image: pImage,
             available: true, created_at: new Date().toISOString(),
           });
