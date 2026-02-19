@@ -1,330 +1,269 @@
- import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Send, Lock, ArrowLeft, Store, Loader,
   Zap, Shield, Eye, EyeOff, Trash, Package, RefreshCw,
   Settings, UtensilsCrossed, LayoutDashboard, LogOut,
   ChefHat, ClipboardList, Edit2, ToggleLeft, ToggleRight, PlusCircle, X,
-  CheckCircle, XCircle, AlertTriangle
+  CheckCircle, XCircle, AlertTriangle, Camera
 } from 'lucide-react';
 
+// ─── ENV ──────────────────────────────────────────────────────────────────────
 const SUPABASE_URL  = (import.meta.env.VITE_SUPABASE_URL  || '').replace(/\/$/, '');
 const SUPABASE_KEY  = import.meta.env.VITE_SUPABASE_KEY   || '';
 const SAAS_PASSWORD = import.meta.env.VITE_SAAS_PASSWORD  || 'master123';
 
-// ─── HELPERS DE API ──────────────────────────────────────────────────────────
+// ─── SCHEMAS CONFIRMADOS ──────────────────────────────────────────────────────
+// orders:   id(auto), store_id(opt,FK→stores), items(jsonb,NN), status(def:Received),
+//           customer_name(NN), delivery_method(NN), address, table_number,
+//           pickup_time, notes, total(NN), created_at
+// products: id(auto), store_id(opt,FK→stores), name(NN), price(NN), category(NN),
+//           description, image, extras, is_available, track_inventory, created_at,
+//           tenant_id(opt,no FK), available
 
-const apiHeaders = (extra = {}) => ({
-  'apikey': SUPABASE_KEY,
-  'Authorization': `Bearer ${SUPABASE_KEY}`,
+// ─── API ──────────────────────────────────────────────────────────────────────
+const H = (extra = {}) => ({
+  apikey: SUPABASE_KEY,
+  Authorization: `Bearer ${SUPABASE_KEY}`,
   'Content-Type': 'application/json',
   ...extra,
 });
 
-const apiFetch = async (table, params = {}) => {
+const dbFetch = async (table, params = {}) => {
   const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
   if (params.select) url.searchParams.set('select', params.select);
-  if (params.eq)     url.searchParams.set(params.eq.column, `eq.${params.eq.value}`);
+  if (params.eq)     url.searchParams.set(params.eq.col, `eq.${params.eq.val}`);
   if (params.limit)  url.searchParams.set('limit', String(params.limit));
-  if (params.order)  url.searchParams.set('order', `${params.order.column}.${params.order.ascending ? 'asc' : 'desc'}`);
-  const res  = await fetch(url.toString(), { headers: apiHeaders() });
+  if (params.order)  url.searchParams.set('order', `${params.order.col}.${params.order.asc ? 'asc' : 'desc'}`);
+  const res  = await fetch(url.toString(), { headers: H() });
   const json = await res.json();
-  if (!res.ok) throw new Error(json?.message || json?.hint || json?.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
   return Array.isArray(json) ? json : [];
 };
 
-const apiInsert = async (table, data) => {
-  const body = Array.isArray(data) ? data : [data];
-  const res  = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: apiHeaders({ 'Prefer': 'return=representation' }),
-    body: JSON.stringify(body),
+const dbInsert = async (table, row) => {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST', headers: H({ Prefer: 'return=representation' }),
+    body: JSON.stringify([row]),
   });
   const json = await res.json();
   if (!res.ok) throw new Error(json?.message || json?.error || JSON.stringify(json));
   return Array.isArray(json) ? json[0] : json;
 };
 
-const apiUpdate = async (table, column, value, data) => {
+const dbUpdate = async (table, id, data) => {
   const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
-  url.searchParams.set(column, `eq.${value}`);
-  const res = await fetch(url.toString(), {
-    method: 'PATCH',
-    headers: apiHeaders(),
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) {
-    const json = await res.json().catch(() => ({}));
-    throw new Error(json?.message || `HTTP ${res.status}`);
-  }
-  return true;
+  url.searchParams.set('id', `eq.${id}`);
+  const res = await fetch(url.toString(), { method: 'PATCH', headers: H(), body: JSON.stringify(data) });
+  if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j?.message || `HTTP ${res.status}`); }
 };
 
-const apiDelete = async (table, column, value) => {
+const dbDelete = async (table, id) => {
   const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
-  url.searchParams.set(column, `eq.${value}`);
-  await fetch(url.toString(), { method: 'DELETE', headers: apiHeaders() });
+  url.searchParams.set('id', `eq.${id}`);
+  await fetch(url.toString(), { method: 'DELETE', headers: H() });
 };
 
-// ─── COMPONENTES BASE ────────────────────────────────────────────────────────
+// ─── UTILS ────────────────────────────────────────────────────────────────────
+const parseItems = (o) => { try { return Array.isArray(o.items) ? o.items : JSON.parse(o.items||'[]'); } catch { return []; } };
+const isAvail    = (p) => p.is_available !== false && p.available !== false;
+const realImg    = (v) => v && (v.startsWith('http') || v.startsWith('data:'));
 
-const Overlay = ({ children }) => (
-  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-    {children}
-  </div>
-);
+const STATUS = {
+  Received:  { label:'🕐 Aguardando', color:'bg-yellow-100 text-yellow-800', border:'border-l-yellow-400' },
+  Preparing: { label:'👨‍🍳 Preparando',  color:'bg-blue-100 text-blue-800',   border:'border-l-blue-400'   },
+  Ready:     { label:'✅ Pronto',      color:'bg-green-100 text-green-700',  border:'border-l-green-400'  },
+  Delivered: { label:'📦 Entregue',   color:'bg-gray-100 text-gray-500',    border:'border-l-gray-200'   },
+  Cancelled: { label:'❌ Cancelado',  color:'bg-red-100 text-red-600',      border:'border-l-red-300'    },
+};
+const st = (s) => STATUS[s] || STATUS.Received;
 
-const Spinner = ({ size = 32, color = 'text-orange-500' }) => (
-  <Loader className={`animate-spin ${color}`} size={size} />
-);
+// ─── BASE UI ──────────────────────────────────────────────────────────────────
+const Overlay  = ({ children }) => <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">{children}</div>;
+const Spin     = ({ sz=28, c='text-orange-500' }) => <Loader size={sz} className={`animate-spin ${c}`} />;
+const Loading  = ({ text='Carregando...' }) => <Overlay><div className="bg-white rounded-2xl p-8 flex flex-col items-center gap-3"><Spin sz={40}/><p className="text-sm font-bold text-gray-500">{text}</p></div></Overlay>;
 
-const LoadingOverlay = ({ text = 'Carregando...' }) => (
-  <Overlay>
-    <div className="bg-white rounded-2xl p-7 flex flex-col items-center gap-3 shadow-2xl">
-      <Spinner size={36} />
-      <p className="text-sm font-bold text-gray-600">{text}</p>
-    </div>
-  </Overlay>
-);
-
-const Toast = ({ msg, type = 'success', onClose }) => {
-  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
-  const bg   = type === 'success' ? 'bg-green-500' : type === 'warning' ? 'bg-yellow-500' : 'bg-red-500';
-  const Icon = type === 'success' ? CheckCircle : type === 'warning' ? AlertTriangle : XCircle;
+const Toast = ({ msg, type, onClose }) => {
+  useEffect(() => { const t = setTimeout(onClose, 4000); return () => clearTimeout(t); }, [onClose]);
+  const bg = { success:'bg-green-500', error:'bg-red-500', warning:'bg-yellow-500' }[type]||'bg-gray-700';
+  const Ic = type==='success' ? CheckCircle : type==='warning' ? AlertTriangle : XCircle;
   return (
-    <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 px-5 py-3 rounded-2xl text-white shadow-2xl text-sm font-bold max-w-sm w-full ${bg}`}>
-      <Icon size={18} />
-      <span className="flex-1">{msg}</span>
-      <button onClick={onClose} className="opacity-70 hover:opacity-100 text-lg leading-none">×</button>
+    <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 px-5 py-3 rounded-2xl text-white shadow-2xl text-sm font-bold max-w-xs w-full ${bg}`}>
+      <Ic size={18} className="flex-shrink-0"/><span className="flex-1">{msg}</span>
+      <button onClick={onClose} className="text-white/70 hover:text-white text-lg">×</button>
     </div>
   );
 };
 
-const STATUS_COLORS = {
-  aguardando: 'bg-yellow-100 text-yellow-800',
-  pending:    'bg-yellow-100 text-yellow-800',
-  preparing:  'bg-blue-100 text-blue-800',
-  ready:      'bg-green-100 text-green-800',
-  delivered:  'bg-gray-100 text-gray-600',
-  cancelled:  'bg-red-100 text-red-700',
-};
-const STATUS_LABELS = {
-  aguardando: 'Aguardando', pending: 'Pendente', preparing: 'Preparando',
-  ready: 'Pronto ✅', delivered: 'Entregue', cancelled: 'Cancelado',
+const PImg = ({ p, cls='w-full h-44', eCls='text-6xl' }) => {
+  const src = realImg(p?.image_url||p?.image) ? (p.image_url||p.image) : null;
+  return src ? <img src={src} alt={p?.name} className={`${cls} object-cover`}/> : <span className={eCls}>{realImg(p?.image)?'🍔':(p?.image||'🍔')}</span>;
 };
 
-const parseItems = (o) => {
-  try { return Array.isArray(o.items) ? o.items : JSON.parse(o.items || '[]'); }
-  catch { return []; }
-};
+// ════════════════════════════════════════════════════════════════════════════════
+// ROOT APP
+// ════════════════════════════════════════════════════════════════════════════════
+export default function App() {
+  const [view, setView]         = useState('loading');
+  const [tenant, setTenant]     = useState(null);
+  const [products, setProducts] = useState([]);
+  const [cart, setCart]         = useState([]);
+  const [orders, setOrders]     = useState([]);
+  const [tenants, setTenants]   = useState([]);
+  const [loading, setLoading]   = useState(false);
+  const [loadOrds, setLoadOrds] = useState(false);
+  const [toast, setToast]       = useState(null);
+  const [adminAuth, setAdminAuth] = useState(false);
+  const [saasAuth, setSaasAuth]   = useState(false);
+  const [tab, setTab]           = useState('resumo');
+  const prevTab                 = useRef('');
 
-// ════════════════════════════════════════════════════════════════════
-// APP PRINCIPAL
-// ════════════════════════════════════════════════════════════════════
-export default function PedidoRapido() {
-  const [view, setView]                       = useState('loading');
-  const [currentTenant, setCurrentTenant]     = useState(null);
-  const [products, setProducts]               = useState([]);
-  const [cart, setCart]                       = useState([]);
-  const [loading, setLoading]                 = useState(false);
-  const [toast, setToast]                     = useState(null);
-  const [tenantAdminAuth, setTenantAdminAuth] = useState(false);
-  const [adminTab, setAdminTab]               = useState('resumo');
-  const [orders, setOrders]                   = useState([]);
-  const [loadingOrders, setLoadingOrders]     = useState(false);
-  const [saasAuth, setSaasAuth]               = useState(false);
-  const [tenants, setTenants]                 = useState([]);
-  const prevTabRef                            = useRef('');
+  const toast$ = useCallback((msg, type='success') => setToast({ msg, type }), []);
 
-  const showToast = useCallback((msg, type = 'success') => setToast({ msg, type }), []);
-  const isAvailable = (p) => p.available !== false && p.is_available !== false;
-
-  // ── Produtos ────────────────────────────────────────────────────
-  const reloadProducts = useCallback(async (tenantId) => {
+  // ── Products ─────────────────────────────────────────────────────
+  const loadProducts = useCallback(async (tid) => {
     try {
-      // Usa tenant_id (store_id tem FK inválida para outra tabela)
-      const prods = await apiFetch('products', { eq: { column: 'tenant_id', value: tenantId } });
+      let prods = [];
+      for (const col of ['tenant_id', 'store_id']) {
+        try {
+          prods = await dbFetch('products', { eq: { col, val: tid } });
+          if (prods.length > 0) break;
+        } catch (_) {}
+      }
       setProducts(prods);
-    } catch { showToast('Erro ao carregar produtos', 'error'); }
-  }, [showToast]);
+    } catch { toast$('Erro ao carregar produtos','error'); }
+  }, [toast$]);
 
-  // ── Pedidos ─────────────────────────────────────────────────────
+  // ── Orders — filtra por store_id ou tenant_id (tenta os dois) ──
   const loadOrders = useCallback(async (tenantId) => {
-    if (!tenantId) return;
-    setLoadingOrders(true);
+    setLoadOrds(true);
     try {
-      // Primeiro tenta descobrir qual coluna FK existe na tabela orders
-      // fazendo GET sem filtro para ver as colunas disponíveis
       let rows = [];
-      const colsToTry = ['store_id', 'tenant_id', 'loja_id', 'restaurante_id'];
-      let loaded = false;
-
-      for (const col of colsToTry) {
-        try {
-          const res = await fetch(
-            `${SUPABASE_URL}/rest/v1/orders?${col}=eq.${tenantId}&order=created_at.desc`,
-            { headers: apiHeaders() }
-          );
-          if (res.ok) {
-            const json = await res.json();
-            rows = Array.isArray(json) ? json : [];
-            loaded = true;
-            break;
-          }
-        } catch (_) {}
+      // Tenta store_id primeiro (após DROP CONSTRAINT funciona como tenant)
+      for (const col of ['store_id', 'tenant_id']) {
+        const tid = tenantId || tenant?.id;
+        if (!tid) break;
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/orders?${col}=eq.${tid}&order=created_at.desc&limit=100`,
+          { headers: H() }
+        );
+        if (res.ok) {
+          const json = await res.json();
+          rows = Array.isArray(json) ? json : [];
+          if (rows.length > 0) break; // achou dados, para
+          // se veio array vazio, ainda é sucesso — mas tenta o outro col por precaução
+          break;
+        }
+        // Se deu erro 400, tenta próxima coluna
       }
-
-      // Se nenhuma FK funcionou, carrega tudo (sem filtro por loja)
-      if (!loaded) {
-        try {
-          const res = await fetch(
-            `${SUPABASE_URL}/rest/v1/orders?order=created_at.desc&limit=50`,
-            { headers: apiHeaders() }
-          );
-          if (res.ok) rows = await res.json().catch(() => []);
-        } catch (_) {}
+      // Fallback: busca todos se não filtrou
+      if (rows.length === 0) {
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/orders?order=created_at.desc&limit=100`,
+          { headers: H() }
+        );
+        if (res.ok) rows = await res.json().catch(() => []);
       }
-
       setOrders(Array.isArray(rows) ? rows : []);
-    } catch { showToast('Erro ao carregar pedidos', 'error'); }
-    finally  { setLoadingOrders(false); }
-  }, [showToast]);
+    } catch { toast$('Erro ao carregar pedidos','error'); }
+    finally { setLoadOrds(false); }
+  }, [toast$, tenant]);
 
-  // ── Tenant pela URL ─────────────────────────────────────────────
-  const loadTenantFromURL = useCallback(async (slug) => {
-    if (!slug)             { setView('home'); return; }
+  // ── All tenants (master) ─────────────────────────────────────────
+  const loadTenants = useCallback(async () => {
+    setLoading(true);
+    try { setTenants(await dbFetch('tenants', { order: { col:'created_at', asc:false } })); }
+    catch { toast$('Erro','error'); }
+    finally { setLoading(false); }
+  }, [toast$]);
+
+  // ── Init from URL ────────────────────────────────────────────────
+  const initSlug = useCallback(async (slug) => {
+    if (!slug)             { setView('home');      return; }
     if (slug === 'master') { setView('saas-login'); return; }
     setLoading(true);
     try {
-      const rows   = await apiFetch('tenants', { eq: { column: 'slug', value: slug } });
-      const tenant = rows[0] || null;
-      if (tenant) {
-        setCurrentTenant(tenant);
-        await reloadProducts(tenant.id);
-        setView('menu');
-        if (window.location.pathname !== `/${slug}`)
-          window.history.replaceState({}, '', `/${slug}`);
-      } else {
-        showToast('Lanchonete não encontrada', 'error');
-        window.history.replaceState({}, '', '/');
-        setView('home');
-      }
-    } catch { showToast('Erro ao carregar a lanchonete', 'error'); setView('home'); }
-    finally  { setLoading(false); }
-  }, [reloadProducts, showToast]);
+      const rows = await dbFetch('tenants', { eq: { col:'slug', val:slug } });
+      if (rows[0]) {
+        setTenant(rows[0]); await loadProducts(rows[0].id); setView('menu');
+        if (window.location.pathname !== `/${slug}`) window.history.replaceState({},''`/${slug}`);
+      } else { toast$('Loja não encontrada','error'); setView('home'); window.history.replaceState({},'','/'); }
+    } catch { toast$('Erro','error'); setView('home'); }
+    finally { setLoading(false); }
+  }, [loadProducts, toast$]);
 
   useEffect(() => {
-    const slug = window.location.pathname.split('/').filter(Boolean)[0] || null;
-    loadTenantFromURL(slug);
-  }, [loadTenantFromURL]);
+    const slug = window.location.pathname.split('/').filter(Boolean)[0]||null;
+    initSlug(slug);
+  }, [initSlug]);
 
-  // Carrega dados ao mudar aba do admin
+  // ── Admin tab auto-load ──────────────────────────────────────────
   useEffect(() => {
-    if (!currentTenant || !tenantAdminAuth || view !== 'tenant-admin') return;
-    if (prevTabRef.current === adminTab) return;
-    prevTabRef.current = adminTab;
-    if (['resumo', 'cozinha'].includes(adminTab))  loadOrders(currentTenant.id);
-    if (['resumo', 'cardapio'].includes(adminTab)) reloadProducts(currentTenant.id);
-  }, [adminTab, view, tenantAdminAuth, currentTenant, loadOrders, reloadProducts]);
+    if (!tenant||!adminAuth||view!=='admin'||prevTab.current===tab) return;
+    prevTab.current = tab;
+    if (['resumo','cozinha'].includes(tab))  loadOrders(tenant.id);
+    if (['resumo','cardapio'].includes(tab)) loadProducts(tenant.id);
+  }, [tab, view, adminAuth, tenant, loadOrders, loadProducts]);
+  useEffect(() => { if (view==='admin'&&adminAuth&&tenant) prevTab.current=''; }, [view,adminAuth,tenant]);
 
-  useEffect(() => {
-    if (view === 'tenant-admin' && tenantAdminAuth && currentTenant)
-      prevTabRef.current = '';
-  }, [view, tenantAdminAuth, currentTenant]);
-
-  // ── Master tenants ──────────────────────────────────────────────
-  const loadTenants = useCallback(async () => {
-    setLoading(true);
-    try {
-      const rows = await apiFetch('tenants', {
-        select: 'id,name,slug,active,trial_expires_at',
-        order:  { column: 'created_at', ascending: false },
-      });
-      setTenants(rows);
-    } catch { showToast('Erro ao carregar lojas', 'error'); }
-    finally  { setLoading(false); }
-  }, [showToast]);
-
-  const go = useCallback((newView, slug = null) => {
-    if (slug)               window.history.pushState({}, '', `/${slug}`);
-    else if (newView === 'home') window.history.pushState({}, '', '/');
-    setView(newView);
+  // ── Nav ──────────────────────────────────────────────────────────
+  const go = useCallback((v, slug=null) => {
+    if (slug)          window.history.pushState({},'',`/${slug}`);
+    else if (v==='home') window.history.pushState({},'','/');
+    setView(v);
   }, []);
 
-  // ── Carrinho ────────────────────────────────────────────────────
-  const addToCart = useCallback((product) => {
-    setCart(prev => {
-      const ex = prev.find(i => i.id === product.id);
-      return ex ? prev.map(i => i.id === product.id ? { ...i, qty: i.qty + 1 } : i)
-                : [...prev, { ...product, qty: 1 }];
-    });
-    showToast(`${product.name} adicionado! 🛒`);
-  }, [showToast]);
+  // ── Cart ─────────────────────────────────────────────────────────
+  const addCart = useCallback((p) => {
+    setCart(prev => { const ex=prev.find(i=>i.id===p.id); return ex?prev.map(i=>i.id===p.id?{...i,qty:i.qty+1}:i):[...prev,{...p,qty:1}]; });
+    toast$(`${p.name} adicionado! 🛒`);
+  }, [toast$]);
+  const chgQty = useCallback((id, d) => setCart(p=>p.map(i=>i.id===id?{...i,qty:i.qty+d}:i).filter(i=>i.qty>0)), []);
+  const cartN   = cart.reduce((s,i)=>s+i.qty,0);
+  const cartT   = cart.reduce((s,i)=>s+parseFloat(i.price||0)*i.qty,0);
 
-  const updateQty = useCallback((id, delta) =>
-    setCart(prev => prev.map(i => i.id === id ? { ...i, qty: i.qty + delta } : i).filter(i => i.qty > 0)), []);
-
-  const cartCount = cart.reduce((s, i) => s + i.qty, 0);
-
-  const updateOrderStatus = useCallback(async (id, status) => {
-    try {
-      await apiUpdate('orders', 'id', id, { status });
-      setOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
-      showToast('Status atualizado!');
-    } catch { showToast('Erro ao atualizar status', 'error'); }
-  }, [showToast]);
+  const updStatus = useCallback(async (id,status) => {
+    try { await dbUpdate('orders',id,{status}); setOrders(p=>p.map(o=>o.id===id?{...o,status}:o)); }
+    catch { toast$('Erro','error'); }
+  }, [toast$]);
 
   // ════════════════════════════════════════════════════════════════
   // HOME
   // ════════════════════════════════════════════════════════════════
   const HomePage = () => {
-    const [recentTenants, setRecentTenants] = useState([]);
-    useEffect(() => {
-      apiFetch('tenants', { select: 'id,name,slug', limit: 5, order: { column: 'created_at', ascending: false } })
-        .then(setRecentTenants).catch(() => {});
-    }, []);
-
-    const accessTenant = async (slug) => {
+    const [recent, setRecent] = useState([]);
+    useEffect(() => { dbFetch('tenants',{limit:6,order:{col:'created_at',asc:false}}).then(setRecent).catch(()=>{}); }, []);
+    const quick = async (slug) => {
       setLoading(true);
-      try {
-        const rows = await apiFetch('tenants', { eq: { column: 'slug', value: slug } });
-        const t = rows[0];
-        if (t) { setCurrentTenant(t); await reloadProducts(t.id); window.history.pushState({}, '', `/${slug}`); setView('menu'); }
-      } catch { showToast('Erro ao acessar loja', 'error'); }
-      finally  { setLoading(false); }
+      try { const r=await dbFetch('tenants',{eq:{col:'slug',val:slug}}); if(r[0]){setTenant(r[0]);await loadProducts(r[0].id);window.history.pushState({},'',`/${slug}`);setView('menu');} }
+      catch { toast$('Erro','error'); } finally { setLoading(false); }
     };
-
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-100 via-red-50 to-yellow-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8">
           <div className="text-center mb-8">
-            <div className="flex items-center justify-center gap-3 mb-4">
-              <Zap className="text-orange-500" size={48} /><div className="text-6xl">🍔</div>
-            </div>
-            <h1 className="text-5xl font-bold bg-gradient-to-r from-orange-500 to-red-500 bg-clip-text text-transparent mb-2">Pedido Rápido</h1>
-            <p className="text-gray-600 font-medium">Sistema Multi-Tenant para Lanchonetes</p>
+            <div className="flex items-center justify-center gap-3 mb-3"><Zap className="text-orange-500" size={44}/><span className="text-5xl">🍔</span></div>
+            <h1 className="text-4xl font-extrabold bg-gradient-to-r from-orange-500 to-red-500 bg-clip-text text-transparent">Pedido Rápido</h1>
+            <p className="text-gray-400 text-sm mt-1">Cardápio digital para lanchonetes</p>
           </div>
-          <div className="space-y-4">
-            <button onClick={() => go('select')} className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg transform hover:scale-105 transition">🏪 Acessar Minha Lanchonete</button>
-            <button onClick={() => go('register')} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg transform hover:scale-105 transition">✨ Começar Grátis (7 dias)</button>
+          <div className="space-y-3">
+            <button onClick={()=>go('select')} className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-4 rounded-xl font-bold text-lg shadow hover:brightness-110 transition active:scale-95">🏪 Acessar minha loja</button>
+            <button onClick={()=>go('register')} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-bold text-lg shadow hover:brightness-110 transition active:scale-95">✨ Começar grátis (7 dias)</button>
           </div>
-          {recentTenants.length > 0 && (
-            <div className="mt-8">
-              <p className="text-sm text-gray-600 mb-3 font-semibold">Clientes recentes:</p>
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {recentTenants.map(t => (
-                  <button key={t.id} onClick={() => accessTenant(t.slug)}
-                    className="w-full text-left px-4 py-3 bg-gradient-to-r from-gray-50 to-orange-50 hover:from-orange-50 hover:to-red-50 rounded-lg transition border border-gray-200">
-                    <p className="font-bold text-gray-800">{t.name}</p>
-                    <p className="text-xs text-gray-500">{window.location.origin}/{t.slug}</p>
+          {recent.length>0&&(
+            <div className="mt-6">
+              <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-2">Lojas recentes</p>
+              <div className="space-y-2 max-h-44 overflow-y-auto">
+                {recent.map(t=>(
+                  <button key={t.id} onClick={()=>quick(t.slug)} className="w-full text-left px-4 py-3 bg-orange-50 hover:bg-orange-100 rounded-xl transition border border-orange-100">
+                    <p className="font-bold text-sm text-gray-800">{t.name}</p>
+                    <p className="text-xs text-gray-400">{window.location.origin}/{t.slug}</p>
                   </button>
                 ))}
               </div>
             </div>
           )}
-          <div className="mt-8 text-center">
-            <button onClick={() => go('saas-login')} className="text-gray-300 hover:text-gray-500 text-xs flex items-center gap-1 mx-auto transition">
-              <Shield size={12} /> Acesso Master
-            </button>
+          <div className="mt-6 text-center">
+            <button onClick={()=>go('saas-login')} className="text-gray-300 hover:text-gray-400 text-xs flex items-center gap-1 mx-auto"><Shield size={11}/> Acesso Master</button>
           </div>
         </div>
       </div>
@@ -335,30 +274,23 @@ export default function PedidoRapido() {
   // SELECT
   // ════════════════════════════════════════════════════════════════
   const SelectPage = () => {
-    const [slug, setSlug] = useState('');
-    const handleAccess = async () => {
-      if (!slug.trim()) { showToast('Digite o identificador', 'error'); return; }
+    const [slug,setSlug]=useState('');
+    const handle = async()=>{
+      if(!slug.trim()){toast$('Digite o identificador','error');return;}
       setLoading(true);
-      try {
-        const rows = await apiFetch('tenants', { eq: { column: 'slug', value: slug.trim().toLowerCase() } });
-        const t = rows[0];
-        if (t) { setCurrentTenant(t); await reloadProducts(t.id); window.history.pushState({}, '', `/${slug}`); setView('menu'); }
-        else showToast('Lanchonete não encontrada!', 'error');
-      } catch { showToast('Erro ao buscar loja', 'error'); }
-      finally  { setLoading(false); }
+      try{const r=await dbFetch('tenants',{eq:{col:'slug',val:slug.trim().toLowerCase()}});if(r[0]){setTenant(r[0]);await loadProducts(r[0].id);window.history.pushState({},'',`/${slug}`);setView('menu');}else toast$('Loja não encontrada!','error');}
+      catch{toast$('Erro','error');}finally{setLoading(false);}
     };
-    return (
+    return(
       <div className="min-h-screen bg-gradient-to-br from-orange-100 to-red-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8">
-          <button onClick={() => go('home')} className="mb-6 flex items-center gap-2 text-gray-600 hover:text-orange-500 transition"><ArrowLeft size={20} /> Voltar</button>
-          <div className="text-center mb-8"><Store className="w-16 h-16 text-orange-500 mx-auto mb-4" /><h2 className="text-3xl font-bold text-gray-800">Acessar Lanchonete</h2></div>
-          <div className="flex items-center border-2 border-gray-300 focus-within:border-orange-500 rounded-xl mb-4 overflow-hidden transition">
-            <span className="pl-4 text-gray-400 text-xs font-mono whitespace-nowrap">{window.location.origin}/</span>
-            <input type="text" value={slug} onChange={e => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-              onKeyDown={e => e.key === 'Enter' && handleAccess()} placeholder="minha-lanchonete"
-              className="flex-1 px-2 py-3 outline-none text-sm" autoFocus />
+          <button onClick={()=>go('home')} className="mb-6 flex items-center gap-2 text-gray-400 hover:text-orange-500 text-sm"><ArrowLeft size={16}/> Voltar</button>
+          <div className="text-center mb-6"><Store className="text-orange-500 mx-auto mb-3" size={44}/><h2 className="text-2xl font-bold">Acessar Lanchonete</h2></div>
+          <div className="flex items-center border-2 border-gray-200 focus-within:border-orange-400 rounded-xl overflow-hidden mb-4 transition">
+            <span className="pl-4 text-gray-300 text-xs font-mono whitespace-nowrap">{window.location.origin}/</span>
+            <input autoFocus value={slug} onChange={e=>setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g,''))} onKeyDown={e=>e.key==='Enter'&&handle()} placeholder="minha-loja" className="flex-1 px-2 py-3 outline-none text-sm"/>
           </div>
-          <button onClick={handleAccess} disabled={loading} className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-xl font-bold transition disabled:opacity-50">Entrar</button>
+          <button onClick={handle} disabled={loading} className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-xl font-bold hover:brightness-110 transition disabled:opacity-50">Entrar</button>
         </div>
       </div>
     );
@@ -368,37 +300,34 @@ export default function PedidoRapido() {
   // REGISTER
   // ════════════════════════════════════════════════════════════════
   const RegisterPage = () => {
-    const [name, setName] = useState(''); const [slug, setSlug] = useState('');
-    const [whatsapp, setWhatsapp] = useState(''); const [password, setPassword] = useState('');
-    const [saving, setSaving] = useState(false);
-    const handleCreate = async () => {
-      if (!name || !slug || !whatsapp || !password) { showToast('Preencha todos os campos!', 'error'); return; }
-      setSaving(true);
-      try {
-        const existing = await apiFetch('tenants', { eq: { column: 'slug', value: slug } });
-        if (existing.length > 0) { showToast('Identificador já existe!', 'error'); return; }
-        const tenant = await apiInsert('tenants', { name, slug, whatsapp, phone: whatsapp, password, plan: 'trial', active: true, created_at: new Date().toISOString() });
-        setCurrentTenant(tenant); setProducts([]);
-        window.history.pushState({}, '', `/${slug}`);
-        showToast('Conta criada! 🎉'); setView('menu');
-      } catch (e) { showToast(`Erro: ${e.message}`, 'error'); }
-      finally     { setSaving(false); }
+    const [f,setF]=useState({name:'',slug:'',whatsapp:'',password:''});
+    const [sav,setSav]=useState(false);
+    const upd=(k,v)=>setF(p=>({...p,[k]:v}));
+    const handle=async()=>{
+      if(!f.name||!f.slug||!f.whatsapp||!f.password){toast$('Preencha todos os campos!','error');return;}
+      setSav(true);
+      try{
+        const ex=await dbFetch('tenants',{eq:{col:'slug',val:f.slug}});
+        if(ex.length){toast$('Identificador já existe!','error');return;}
+        const t=await dbInsert('tenants',{name:f.name,slug:f.slug,whatsapp:f.whatsapp,phone:f.whatsapp,password:f.password,plan:'trial',active:true,created_at:new Date().toISOString()});
+        setTenant(t);setProducts([]);window.history.pushState({},'',`/${f.slug}`);toast$('Conta criada! 🎉');setView('menu');
+      }catch(e){toast$(`Erro: ${e.message}`,'error');}finally{setSav(false);}
     };
-    return (
+    return(
       <div className="min-h-screen bg-gradient-to-br from-green-100 to-blue-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8">
-          <button onClick={() => go('home')} className="mb-6 flex items-center gap-2 text-gray-600 hover:text-green-500 transition"><ArrowLeft size={20} /> Voltar</button>
-          <div className="text-center mb-8"><div className="text-6xl mb-4">🎉</div><h2 className="text-3xl font-bold mb-2">Comece Grátis</h2><p className="text-gray-600 text-sm">7 dias de teste • Sem cartão de crédito</p></div>
-          <div className="space-y-4">
-            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nome da Lanchonete *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-green-500 rounded-xl outline-none transition" />
+          <button onClick={()=>go('home')} className="mb-6 flex items-center gap-2 text-gray-400 hover:text-green-500 text-sm"><ArrowLeft size={16}/> Voltar</button>
+          <div className="text-center mb-6"><div className="text-5xl mb-2">🎉</div><h2 className="text-2xl font-bold">Comece Grátis</h2><p className="text-gray-400 text-sm">7 dias • Sem cartão</p></div>
+          <div className="space-y-3">
+            <input placeholder="Nome da lanchonete *" value={f.name} onChange={e=>upd('name',e.target.value)} className="w-full px-4 py-3 border-2 border-gray-200 focus:border-green-400 rounded-xl outline-none text-sm"/>
+            <input placeholder="WhatsApp (5585999999999) *" value={f.whatsapp} onChange={e=>upd('whatsapp',e.target.value.replace(/\D/g,''))} className="w-full px-4 py-3 border-2 border-gray-200 focus:border-green-400 rounded-xl outline-none text-sm"/>
+            <input type="password" placeholder="Senha de admin *" value={f.password} onChange={e=>upd('password',e.target.value)} className="w-full px-4 py-3 border-2 border-gray-200 focus:border-green-400 rounded-xl outline-none text-sm"/>
             <div>
-              <input type="text" value={slug} onChange={e => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="identificador-unico *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-green-500 rounded-xl outline-none transition" />
-              <p className="text-xs text-gray-500 mt-1">Seu link: {window.location.origin}/<span className="font-semibold text-green-600">{slug || 'seu-link'}</span></p>
+              <input placeholder="identificador-unico *" value={f.slug} onChange={e=>upd('slug',e.target.value.toLowerCase().replace(/[^a-z0-9-]/g,''))} className="w-full px-4 py-3 border-2 border-gray-200 focus:border-green-400 rounded-xl outline-none text-sm"/>
+              <p className="text-xs text-gray-400 mt-1">Link: {window.location.origin}/<b className="text-green-500">{f.slug||'seu-link'}</b></p>
             </div>
-            <input type="text" value={whatsapp} onChange={e => setWhatsapp(e.target.value.replace(/[^0-9]/g, ''))} placeholder="WhatsApp (5585999999999) *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-green-500 rounded-xl outline-none transition" />
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Senha de Admin *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-green-500 rounded-xl outline-none transition" />
-            <button onClick={handleCreate} disabled={saving} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-bold text-lg transition disabled:opacity-50 flex items-center justify-center gap-2">
-              {saving ? <Spinner size={20} color="text-white" /> : '🚀'}{saving ? 'Criando...' : 'Criar Minha Conta'}
+            <button onClick={handle} disabled={sav} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 hover:brightness-110 disabled:opacity-50">
+              {sav?<Spin sz={20} c="text-white"/>:'🚀'} {sav?'Criando...':'Criar Minha Conta'}
             </button>
           </div>
         </div>
@@ -409,26 +338,20 @@ export default function PedidoRapido() {
   // ════════════════════════════════════════════════════════════════
   // SAAS LOGIN
   // ════════════════════════════════════════════════════════════════
-  const SaasLoginPage = () => {
-    const [pw, setPw] = useState(''); const [showPw, setShowPw] = useState(false); const [err, setErr] = useState('');
-    const handleLogin = () => {
-      if (pw === SAAS_PASSWORD) { setSaasAuth(true); loadTenants(); setView('saas-dashboard'); }
-      else setErr('Senha incorreta');
-    };
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center p-6">
+  const SaasLogin = () => {
+    const [pw,setPw]=useState('');const [show,setShow]=useState(false);const [err,setErr]=useState('');
+    const handle=()=>{if(pw===SAAS_PASSWORD){setSaasAuth(true);loadTenants();setView('saas');}else setErr('Senha incorreta');};
+    return(
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl p-8 shadow-2xl w-full max-w-sm">
-          <div className="text-center mb-8"><Shield size={48} className="mx-auto text-orange-500 mb-3" /><h2 className="text-2xl font-extrabold">Master Admin</h2><p className="text-gray-500 text-sm mt-1">Acesso restrito</p></div>
+          <div className="text-center mb-6"><Shield size={44} className="mx-auto text-orange-500 mb-2"/><h2 className="text-2xl font-extrabold">Master Admin</h2></div>
           <div className="relative mb-3">
-            <input type={showPw ? 'text' : 'password'} placeholder="Senha master" value={pw}
-              onChange={e => { setPw(e.target.value); setErr(''); }}
-              onKeyDown={e => e.key === 'Enter' && handleLogin()}
-              className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 pr-12 text-sm focus:border-orange-400 outline-none" autoFocus />
-            <button onClick={() => setShowPw(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">{showPw ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+            <input type={show?'text':'password'} value={pw} onChange={e=>{setPw(e.target.value);setErr('');}} onKeyDown={e=>e.key==='Enter'&&handle()} placeholder="Senha master" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 pr-11 text-sm focus:border-orange-400 outline-none" autoFocus/>
+            <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">{show?<EyeOff size={18}/>:<Eye size={18}/>}</button>
           </div>
-          {err && <p className="text-red-500 text-sm mb-3 text-center">{err}</p>}
-          <button onClick={handleLogin} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 transition">Entrar</button>
-          <button onClick={() => go('home')} className="w-full mt-3 text-gray-400 text-sm hover:text-gray-600 flex items-center justify-center gap-1 transition"><ArrowLeft size={14} /> Voltar</button>
+          {err&&<p className="text-red-500 text-sm text-center mb-3">{err}</p>}
+          <button onClick={handle} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110">Entrar</button>
+          <button onClick={()=>go('home')} className="w-full mt-3 text-gray-400 text-sm hover:text-gray-600 flex items-center justify-center gap-1"><ArrowLeft size={14}/> Voltar</button>
         </div>
       </div>
     );
@@ -437,67 +360,58 @@ export default function PedidoRapido() {
   // ════════════════════════════════════════════════════════════════
   // SAAS DASHBOARD
   // ════════════════════════════════════════════════════════════════
-  const SaasDashboard = () => {
-    const [showModal, setShowModal] = useState(false);
-    const [newName, setNewName] = useState(''); const [newSlug, setNewSlug] = useState('');
-    const [newPhone, setNewPhone] = useState(''); const [newPw, setNewPw] = useState('');
-    const [newExpiry, setNewExpiry] = useState(''); const [saving, setSaving] = useState(false);
-
-    const createTenantMaster = async () => {
-      if (!newName.trim() || !newSlug.trim()) { showToast('Nome e slug obrigatórios', 'error'); return; }
-      setSaving(true);
-      try {
-        await apiInsert('tenants', { name: newName, slug: newSlug.toLowerCase().replace(/\s+/g, '-'), whatsapp: newPhone, phone: newPhone, password: newPw || 'admin123', trial_expires_at: newExpiry || null, active: true, created_at: new Date().toISOString() });
-        showToast('Loja criada!'); setShowModal(false);
-        setNewName(''); setNewSlug(''); setNewPhone(''); setNewPw(''); setNewExpiry('');
-        loadTenants();
-      } catch (e) { showToast(`Erro: ${e.message}`, 'error'); }
-      finally     { setSaving(false); }
+  const SaasDash = () => {
+    const [modal,setModal]=useState(false);
+    const [nf,setNf]=useState({name:'',slug:'',phone:'',pw:'',exp:''});
+    const [sav,setSav]=useState(false);
+    const upd=(k,v)=>setNf(p=>({...p,[k]:v}));
+    const create=async()=>{
+      if(!nf.name.trim()||!nf.slug.trim()){toast$('Nome e slug obrigatórios','error');return;}
+      setSav(true);
+      try{await dbInsert('tenants',{name:nf.name,slug:nf.slug.toLowerCase().replace(/\s+/g,'-'),whatsapp:nf.phone,phone:nf.phone,password:nf.pw||'admin123',trial_expires_at:nf.exp||null,active:true,created_at:new Date().toISOString()});toast$('Loja criada!');setModal(false);setNf({name:'',slug:'',phone:'',pw:'',exp:''});loadTenants();}
+      catch(e){toast$(`Erro: ${e.message}`,'error');}finally{setSav(false);}
     };
-
-    return (
+    return(
       <div className="min-h-screen bg-gray-100">
-        <div className="bg-gradient-to-r from-gray-900 to-gray-800 text-white p-5 flex justify-between items-center shadow-lg">
-          <div className="flex items-center gap-3"><Shield size={28} className="text-orange-400" /><div><h1 className="text-xl font-extrabold">Master Admin</h1><p className="text-gray-400 text-xs">{tenants.length} lojas</p></div></div>
-          <button onClick={() => { setSaasAuth(false); go('home'); }} className="flex items-center gap-2 text-gray-300 hover:text-white text-sm transition"><LogOut size={16} /> Sair</button>
+        <div className="bg-gradient-to-r from-gray-900 to-gray-800 text-white p-4 flex justify-between items-center shadow">
+          <div className="flex items-center gap-3"><Shield size={22} className="text-orange-400"/><div><p className="font-extrabold">Master Admin</p><p className="text-xs text-gray-400">{tenants.length} lojas</p></div></div>
+          <button onClick={()=>{setSaasAuth(false);go('home');}} className="text-gray-300 hover:text-white text-sm flex items-center gap-1"><LogOut size={14}/> Sair</button>
         </div>
-        <div className="max-w-4xl mx-auto p-6">
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            {[{label:'Total',value:tenants.length,color:'text-orange-500'},{label:'Ativas',value:tenants.filter(t=>t.active).length,color:'text-green-500'},{label:'Inativas',value:tenants.filter(t=>!t.active).length,color:'text-red-500'}].map(s=>(
-              <div key={s.label} className="bg-white rounded-2xl p-4 shadow text-center"><p className={`text-3xl font-extrabold ${s.color}`}>{s.value}</p><p className="text-gray-500 text-sm">{s.label}</p></div>
+        <div className="max-w-3xl mx-auto p-4">
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            {[['Total',tenants.length,'text-orange-500'],['Ativas',tenants.filter(t=>t.active).length,'text-green-500'],['Inativas',tenants.filter(t=>!t.active).length,'text-red-500']].map(([l,v,c])=>(
+              <div key={l} className="bg-white rounded-xl p-3 shadow text-center"><p className={`text-3xl font-extrabold ${c}`}>{v}</p><p className="text-gray-400 text-xs">{l}</p></div>
             ))}
           </div>
-          <button onClick={() => setShowModal(true)} className="w-full mb-6 py-4 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-2xl font-bold text-lg shadow-lg hover:brightness-110 transition flex items-center justify-center gap-2"><PlusCircle size={22} /> Nova Loja</button>
-          <div className="space-y-3">
-            {loading ? <div className="flex justify-center py-12"><Spinner size={40} /></div> :
-             tenants.length === 0 ? <div className="text-center py-12 text-gray-400"><Store size={48} className="mx-auto mb-3 opacity-30" /><p>Nenhuma loja</p></div> :
-             tenants.map(t => (
-              <div key={t.id} className="bg-white rounded-2xl p-4 shadow flex items-center gap-4">
-                <div className={`w-3 h-3 rounded-full flex-shrink-0 ${t.active ? 'bg-green-500' : 'bg-gray-300'}`} />
-                <div className="flex-1 min-w-0"><p className="font-bold truncate">{t.name}</p><p className="text-sm text-gray-500">/{t.slug}</p>{t.trial_expires_at && <p className="text-xs text-orange-500">Expira: {new Date(t.trial_expires_at).toLocaleDateString('pt-BR')}</p>}</div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => window.open(`/${t.slug}`, '_blank')} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg transition"><Store size={16} /></button>
-                  <button onClick={async()=>{ try{ await apiUpdate('tenants','id',t.id,{active:!t.active}); setTenants(p=>p.map(x=>x.id===t.id?{...x,active:!x.active}:x)); showToast(t.active?'Desativada':'Ativada'); }catch{ showToast('Erro','error'); }}} className={`p-2 rounded-lg transition ${t.active?'text-green-600 hover:bg-green-50':'text-gray-400 hover:bg-gray-50'}`}>{t.active ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}</button>
-                  <button onClick={async()=>{ if(!window.confirm(`Excluir "${t.name}"?`))return; try{ await apiDelete('tenants','id',t.id); setTenants(p=>p.filter(x=>x.id!==t.id)); showToast('Excluída'); }catch{ showToast('Erro','error'); }}} className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition"><Trash size={16} /></button>
+          <button onClick={()=>setModal(true)} className="w-full mb-4 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:brightness-110"><PlusCircle size={18}/> Nova Loja</button>
+          <div className="space-y-2">
+            {tenants.map(t=>(
+              <div key={t.id} className="bg-white rounded-xl p-4 shadow flex items-center gap-3">
+                <div className={`w-3 h-3 rounded-full flex-shrink-0 ${t.active?'bg-green-500':'bg-gray-300'}`}/>
+                <div className="flex-1 min-w-0"><p className="font-bold truncate text-sm">{t.name}</p><p className="text-xs text-gray-400">/{t.slug}</p></div>
+                <div className="flex gap-1">
+                  <button onClick={()=>window.open(`/${t.slug}`,'_blank')} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg"><Store size={14}/></button>
+                  <button onClick={async()=>{try{await dbUpdate('tenants',t.id,{active:!t.active});setTenants(p=>p.map(x=>x.id===t.id?{...x,active:!x.active}:x));}catch{toast$('Erro','error');}}} className={`p-2 rounded-lg ${t.active?'text-green-600 hover:bg-green-50':'text-gray-400 hover:bg-gray-50'}`}>{t.active?<ToggleRight size={18}/>:<ToggleLeft size={18}/>}</button>
+                  <button onClick={async()=>{if(!window.confirm(`Excluir "${t.name}"?`))return;try{await dbDelete('tenants',t.id);setTenants(p=>p.filter(x=>x.id!==t.id));}catch{toast$('Erro','error');}}} className="p-2 text-red-400 hover:bg-red-50 rounded-lg"><Trash size={14}/></button>
                 </div>
               </div>
             ))}
           </div>
         </div>
-        {showModal && (
+        {modal&&(
           <Overlay>
             <div className="bg-white rounded-3xl p-6 shadow-2xl w-full max-w-md">
-              <div className="flex justify-between items-center mb-5"><h3 className="text-xl font-extrabold">Nova Loja</h3><button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-700"><X size={22} /></button></div>
+              <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-extrabold">Nova Loja</h3><button onClick={()=>setModal(false)}><X size={22} className="text-gray-400"/></button></div>
               <div className="space-y-3">
-                <input placeholder="Nome da loja *" value={newName} onChange={e => setNewName(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
-                <input placeholder="Slug (ex: comabem) *" value={newSlug} onChange={e => setNewSlug(e.target.value.toLowerCase().replace(/\s+/g,'-'))} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
-                <input placeholder="WhatsApp (5585999999999)" value={newPhone} onChange={e => setNewPhone(e.target.value.replace(/[^0-9]/g,''))} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
-                <input placeholder="Senha admin (padrão: admin123)" value={newPw} onChange={e => setNewPw(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
-                <div><label className="text-xs text-gray-500 mb-1 block">Expiração do trial</label><input type="date" value={newExpiry} onChange={e => setNewExpiry(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" /></div>
+                <input placeholder="Nome *" value={nf.name} onChange={e=>upd('name',e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/>
+                <input placeholder="Slug *" value={nf.slug} onChange={e=>upd('slug',e.target.value.toLowerCase().replace(/\s+/g,'-'))} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/>
+                <input placeholder="WhatsApp" value={nf.phone} onChange={e=>upd('phone',e.target.value.replace(/\D/g,''))} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/>
+                <input placeholder="Senha (padrão: admin123)" value={nf.pw} onChange={e=>upd('pw',e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/>
+                <div><label className="text-xs text-gray-400 block mb-1">Expiração trial</label><input type="date" value={nf.exp} onChange={e=>upd('exp',e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/></div>
               </div>
-              <div className="flex gap-3 mt-6">
-                <button onClick={() => setShowModal(false)} className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50 transition">Cancelar</button>
-                <button onClick={createTenantMaster} disabled={saving} className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-bold hover:brightness-110 transition disabled:opacity-50 flex items-center justify-center gap-2">{saving ? <Spinner size={18} color="text-white" /> : <PlusCircle size={18} />} Criar</button>
+              <div className="flex gap-3 mt-5">
+                <button onClick={()=>setModal(false)} className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50">Cancelar</button>
+                <button onClick={create} disabled={sav} className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-bold hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2">{sav?<Spin sz={16} c="text-white"/>:<PlusCircle size={16}/>} Criar</button>
               </div>
             </div>
           </Overlay>
@@ -510,65 +424,56 @@ export default function PedidoRapido() {
   // MENU
   // ════════════════════════════════════════════════════════════════
   const MenuPage = () => {
-    const [showAdminLogin, setShowAdminLogin] = useState(false);
-    const [adminPw, setAdminPw] = useState(''); const [adminErr, setAdminErr] = useState('');
-    if (!currentTenant) return <LoadingOverlay text="Carregando loja..." />;
-    const available = products.filter(isAvailable);
-    const handleAdminLogin = () => {
-      if (adminPw === (currentTenant.password || 'admin123')) {
-        setTenantAdminAuth(true); setShowAdminLogin(false); setAdminTab('resumo'); prevTabRef.current = ''; setView('tenant-admin');
-      } else setAdminErr('Senha incorreta');
+    const [showLogin,setShowLogin]=useState(false);
+    const [pw,setPw]=useState('');const [err,setErr]=useState('');
+    if(!tenant) return <Loading text="Carregando loja..."/>;
+    const avail=products.filter(isAvail);
+    const doLogin=()=>{
+      if(pw===(tenant.password||'admin123')){setAdminAuth(true);setShowLogin(false);setTab('resumo');prevTab.current='';setView('admin');}
+      else setErr('Senha incorreta');
     };
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50">
+    return(
+      <div className="min-h-screen bg-gray-50">
         <header className="bg-gradient-to-r from-orange-500 to-red-500 text-white p-4 sticky top-0 z-40 shadow-lg">
-          <div className="container mx-auto flex justify-between items-center">
-            <div className="flex items-center gap-3"><Zap size={28} /><div><h1 className="text-xl font-bold leading-tight">{currentTenant.name}</h1><p className="text-xs opacity-80">Pedido Rápido</p></div></div>
+          <div className="max-w-5xl mx-auto flex justify-between items-center">
+            <div className="flex items-center gap-3"><Zap size={22}/><div><h1 className="font-extrabold text-lg leading-tight">{tenant.name}</h1><p className="text-xs opacity-70">Pedido Rápido</p></div></div>
             <div className="flex gap-2">
-              <button onClick={() => go('cart')} className="bg-orange-600 hover:bg-orange-700 p-3 rounded-xl relative transition">
-                <ShoppingCart size={20} />
-                {cartCount > 0 && <span className="absolute -top-2 -right-2 bg-yellow-400 text-orange-900 text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">{cartCount}</span>}
+              <button onClick={()=>go('cart')} className="relative bg-orange-600 hover:bg-orange-700 p-3 rounded-xl transition">
+                <ShoppingCart size={20}/>
+                {cartN>0&&<span className="absolute -top-1.5 -right-1.5 bg-yellow-400 text-orange-900 text-xs font-extrabold rounded-full w-5 h-5 flex items-center justify-center">{cartN}</span>}
               </button>
-              <button onClick={() => tenantAdminAuth ? setView('tenant-admin') : setShowAdminLogin(true)} className="bg-orange-600 hover:bg-orange-700 p-3 rounded-xl transition"><Lock size={20} /></button>
+              <button onClick={()=>adminAuth?setView('admin'):setShowLogin(true)} className="bg-orange-600 hover:bg-orange-700 p-3 rounded-xl transition"><Lock size={20}/></button>
             </div>
           </div>
         </header>
-        <div className="container mx-auto p-6">
-          {available.length === 0 ? (
-            <div className="text-center py-20 text-gray-500">
-              <Package size={80} className="mx-auto mb-4 opacity-30" />
-              <h2 className="text-2xl font-bold mb-2">Cardápio vazio</h2>
-              <button onClick={() => reloadProducts(currentTenant.id)} className="px-6 py-3 bg-orange-500 text-white rounded-xl font-bold hover:bg-orange-600 transition mt-4"><RefreshCw size={16} className="inline mr-2" />Atualizar</button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {available.map(p => (
-                <div key={p.id} className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition transform hover:scale-105">
-                  <div className="w-full h-40 flex items-center justify-center mb-4 rounded-xl overflow-hidden bg-orange-50">
-                    {(p.image_url || (p.image && (p.image.startsWith('http') || p.image.startsWith('data:')))) ? (
-                      <img src={p.image_url || p.image} alt={p.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-7xl">{p.image || '🍔'}</span>
-                    )}
-                  </div>
-                  <h3 className="text-xl font-bold text-center mb-2">{p.name}</h3>
-                  {p.description && <p className="text-sm text-gray-600 text-center mb-3 line-clamp-2">{p.description}</p>}
-                  <div className="flex justify-between items-center">
-                    <span className="text-2xl font-bold text-orange-500">R$ {parseFloat(p.price || 0).toFixed(2)}</span>
-                    <button onClick={() => addToCart(p)} className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 transition active:scale-95"><Plus size={16} /> Adicionar</button>
+        <div className="max-w-5xl mx-auto p-4">
+          {avail.length===0?(
+            <div className="text-center py-24 text-gray-300"><Package size={72} className="mx-auto mb-4 opacity-40"/><h2 className="text-xl font-bold text-gray-400 mb-2">Cardápio vazio</h2><button onClick={()=>loadProducts(tenant.id)} className="mt-4 px-6 py-3 bg-orange-500 text-white rounded-xl font-bold hover:bg-orange-600 text-sm"><RefreshCw size={14} className="inline mr-2"/>Atualizar</button></div>
+          ):(
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+              {avail.map(p=>(
+                <div key={p.id} className="bg-white rounded-2xl shadow-md overflow-hidden hover:shadow-lg transition">
+                  <div className="h-44 bg-orange-50 flex items-center justify-center overflow-hidden"><PImg p={p} cls="w-full h-44" eCls="text-7xl"/></div>
+                  <div className="p-4">
+                    <h3 className="font-extrabold text-gray-800 mb-1">{p.name}</h3>
+                    {p.description&&<p className="text-sm text-gray-400 mb-3 line-clamp-2">{p.description}</p>}
+                    <div className="flex justify-between items-center">
+                      <span className="text-xl font-extrabold text-orange-500">R$ {parseFloat(p.price||0).toFixed(2)}</span>
+                      <button onClick={()=>addCart(p)} className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1 transition active:scale-95"><Plus size={14}/> Add</button>
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           )}
         </div>
-        {showAdminLogin && (
+        {showLogin&&(
           <Overlay>
             <div className="bg-white rounded-3xl p-6 shadow-2xl w-full max-w-sm">
-              <div className="flex justify-between items-center mb-5"><h3 className="text-xl font-extrabold flex items-center gap-2"><Lock size={20} className="text-orange-500" /> Admin da Loja</h3><button onClick={() => { setShowAdminLogin(false); setAdminErr(''); }} className="text-gray-400 hover:text-gray-700"><X size={22} /></button></div>
-              <input type="password" placeholder="Senha de administrador" value={adminPw} onChange={e => { setAdminPw(e.target.value); setAdminErr(''); }} onKeyDown={e => e.key === 'Enter' && handleAdminLogin()} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none mb-3" autoFocus />
-              {adminErr && <p className="text-red-500 text-sm mb-3">{adminErr}</p>}
-              <button onClick={handleAdminLogin} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 transition">Entrar</button>
+              <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-extrabold flex items-center gap-2"><Lock size={18} className="text-orange-500"/>Admin</h3><button onClick={()=>{setShowLogin(false);setErr('');}}><X size={22} className="text-gray-400"/></button></div>
+              <input type="password" value={pw} onChange={e=>{setPw(e.target.value);setErr('');}} onKeyDown={e=>e.key==='Enter'&&doLogin()} placeholder="Senha de administrador" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none mb-3" autoFocus/>
+              {err&&<p className="text-red-500 text-sm mb-3">{err}</p>}
+              <button onClick={doLogin} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110">Entrar</button>
             </div>
           </Overlay>
         )}
@@ -580,140 +485,103 @@ export default function PedidoRapido() {
   // CART
   // ════════════════════════════════════════════════════════════════
   const CartPage = () => {
-    const [name, setName]             = useState('');
-    const [orderType, setOrderType]   = useState('local');
-    const [tableNum, setTableNum]     = useState('');
-    const [address, setAddress]       = useState('');
-    const [addressRef, setAddressRef] = useState('');
-    const [sending, setSending]       = useState(false);
-    if (!currentTenant) return null;
-    const total = cart.reduce((s, i) => s + parseFloat(i.price || 0) * i.qty, 0);
+    const [name,setName]=useState('');
+    const [type,setType]=useState('local');
+    const [mesa,setMesa]=useState('');
+    const [addr,setAddr]=useState('');
+    const [ref,setRef]=useState('');
+    const [snd,setSnd]=useState(false);
+    if(!tenant) return null;
 
-    const handleSend = async () => {
-      if (!name.trim())                                     { showToast('Digite seu nome!', 'error'); return; }
-      if (orderType === 'local'   && !tableNum.trim())      { showToast('Digite o número da mesa!', 'error'); return; }
-      if (orderType === 'entrega' && !address.trim())       { showToast('Digite o endereço!', 'error'); return; }
-      if (cart.length === 0)                                { showToast('Carrinho vazio!', 'error'); return; }
-      setSending(true);
-      try {
-        // Monta info de localização no nome do cliente
-        let loc = '';
-        if (orderType === 'local')   loc = `Mesa ${tableNum}`;
-        if (orderType === 'viagem')  loc = 'Viagem';
-        if (orderType === 'entrega') loc = `Entrega: ${address}${addressRef ? ' | ' + addressRef : ''}`;
-
-        // INSERT de pedido — tenta com store_id, depois sem (FK pode ser inválida)
-        const orderPayload = {
-          customer_name:   `${name} (${loc})`,
-          items:           JSON.stringify(cart),
-          total,
-          status:          'aguardando',
-          delivery_method: orderType,
+    const send=async()=>{
+      if(!name.trim())               {toast$('Digite seu nome!','error');   return;}
+      if(type==='local'&&!mesa.trim()){toast$('Digite o nº da mesa!','error');return;}
+      if(type==='entrega'&&!addr.trim()){toast$('Digite o endereço!','error'); return;}
+      if(!cart.length)               {toast$('Carrinho vazio!','error');    return;}
+      setSnd(true);
+      try{
+        // ── INSERT com schema exato de orders ──
+        // NOT NULL: customer_name, delivery_method, items(jsonb), total
+        const row={
+          customer_name:   name,
+          delivery_method: type,
+          items:           cart,
+          total:           cartT,
+          status:          'Received',
+          store_id:        tenant.id,   // liga pedido à loja (após DROP CONSTRAINT)
+          tenant_id:       tenant.id,   // coluna extra para filtro (se existir)
           created_at:      new Date().toISOString(),
         };
-        // Tenta adicionar FK de loja — ignora erro de coluna inexistente
-        let orderInserted = false;
-        for (const variant of [
-          { ...orderPayload, store_id: currentTenant.id },
-          { ...orderPayload, tenant_id: currentTenant.id },
-          orderPayload,
-        ]) {
-          const res = await fetch(`${SUPABASE_URL}/rest/v1/orders`, {
-            method: 'POST',
-            headers: apiHeaders({ 'Prefer': 'return=representation' }),
-            body: JSON.stringify([variant]),
-          });
-          if (res.ok) { orderInserted = true; break; }
-          const err = await res.json().catch(() => ({}));
-          const msg = err?.message || '';
-          // Para apenas se NÃO for erro de coluna/FK inválida
-          if (!msg.includes('column') && !msg.includes('schema') && !msg.includes('cache') && !msg.includes('fkey')) {
-            throw new Error(msg || `HTTP ${res.status}`);
-          }
-        }
-        if (!orderInserted) throw new Error('Não foi possível registrar o pedido');
+        if(type==='local')   row.table_number=mesa;
+        if(type==='entrega') row.address=addr+(ref?` | Ref: ${ref}`:'');
+        if(type==='viagem')  row.notes='Para viagem';
 
-        // WhatsApp
-        const wp = currentTenant.whatsapp || currentTenant.phone;
-        if (wp) {
-          let wloc = orderType === 'local' ? `🪑 Mesa ${tableNum}` : orderType === 'viagem' ? '🛍️ Para viagem' : `🛵 ${address}${addressRef ? ' | ' + addressRef : ''}`;
-          let msg = `🍔 PEDIDO RÁPIDO - ${currentTenant.name}%0A%0A👤 ${name}%0A📍 ${wloc}%0A%0A`;
-          cart.forEach(i => { msg += `${i.image || '🍔'} ${i.name} - ${i.qty}x R$${parseFloat(i.price).toFixed(2)}%0A`; });
-          msg += `%0A💰 TOTAL: R$${total.toFixed(2)}`;
-          window.open(`https://wa.me/${wp}?text=${msg}`, '_blank');
+        await dbInsert('orders',row);
+
+        const wp=tenant.whatsapp||tenant.phone;
+        if(wp){
+          const loc=type==='local'?`🪑 Mesa ${mesa}`:type==='viagem'?'🛍️ Para viagem':`🛵 ${addr}`;
+          let msg=`🍔 *PEDIDO - ${tenant.name}*%0A%0A👤 ${name}%0A📍 ${loc}%0A%0A`;
+          cart.forEach(i=>{msg+=`• ${i.qty}x ${i.name} — R$${(parseFloat(i.price)*i.qty).toFixed(2)}%0A`;});
+          msg+=`%0A💰 *TOTAL: R$${cartT.toFixed(2)}*`;
+          window.open(`https://wa.me/${wp}?text=${msg}`,'_blank');
         }
-        setCart([]); showToast('Pedido enviado! 🎉'); setView('menu');
-      } catch (e) { showToast(`Erro: ${e.message}`, 'error'); }
-      finally     { setSending(false); }
+        setCart([]);toast$('Pedido enviado! 🎉');setView('menu');
+      }catch(e){toast$(`Erro: ${e.message}`,'error');}
+      finally{setSnd(false);}
     };
 
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50">
-        <header className="bg-gradient-to-r from-orange-500 to-red-500 text-white p-4 shadow-lg">
-          <button onClick={() => go('menu')} className="flex items-center gap-2 mb-2 hover:opacity-80 transition"><ArrowLeft size={20} /> Voltar ao Cardápio</button>
-          <h1 className="text-3xl font-bold">Seu Carrinho</h1>
+    return(
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-gradient-to-r from-orange-500 to-red-500 text-white p-4 shadow">
+          <button onClick={()=>go('menu')} className="flex items-center gap-2 mb-2 opacity-90 hover:opacity-100 text-sm"><ArrowLeft size={16}/> Voltar ao Cardápio</button>
+          <h1 className="text-2xl font-extrabold">Seu Carrinho</h1>
         </header>
-        <div className="container mx-auto p-6 max-w-2xl">
-          {cart.length === 0 ? (
-            <div className="bg-white rounded-2xl shadow-lg p-12 text-center">
-              <ShoppingCart className="w-20 h-20 text-gray-300 mx-auto mb-4" />
-              <p className="text-gray-500 text-xl mb-6">Carrinho vazio</p>
-              <button onClick={() => go('menu')} className="bg-orange-500 text-white px-6 py-3 rounded-xl font-bold hover:bg-orange-600 transition">Ver Cardápio</button>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {/* Itens */}
-              <div className="bg-white rounded-2xl shadow-lg p-6 space-y-4">
-                {cart.map(item => (
-                  <div key={item.id} className="flex items-center gap-4 border-b pb-4 last:border-0 last:pb-0">
-                    <div className="w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 bg-orange-50 flex items-center justify-center">
-                      {(item.image_url || (item.image && (item.image.startsWith('http') || item.image.startsWith('data:')))) ? (
-                        <img src={item.image_url || item.image} alt={item.name} className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-3xl">{item.image || '🍔'}</span>
-                      )}
-                    </div>
-                    <div className="flex-1"><p className="font-bold">{item.name}</p><p className="text-orange-500 font-semibold">R$ {parseFloat(item.price).toFixed(2)}</p></div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => updateQty(item.id, -1)} className="bg-gray-200 hover:bg-gray-300 p-2 rounded-lg transition"><Minus size={14} /></button>
-                      <span className="font-bold w-6 text-center">{item.qty}</span>
-                      <button onClick={() => updateQty(item.id,  1)} className="bg-orange-500 hover:bg-orange-600 text-white p-2 rounded-lg transition"><Plus size={14} /></button>
-                      <button onClick={() => setCart(c => c.filter(i => i.id !== item.id))} className="bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg ml-1 transition"><Trash2 size={14} /></button>
+        <div className="max-w-lg mx-auto p-4 space-y-4">
+          {cart.length===0?(
+            <div className="bg-white rounded-2xl shadow p-12 text-center"><ShoppingCart className="text-gray-200 mx-auto mb-4" size={64}/><p className="text-gray-400 mb-4">Carrinho vazio</p><button onClick={()=>go('menu')} className="bg-orange-500 text-white px-6 py-3 rounded-xl font-bold hover:bg-orange-600">Ver Cardápio</button></div>
+          ):(
+            <>
+              <div className="bg-white rounded-2xl shadow p-4 space-y-3">
+                {cart.map(item=>(
+                  <div key={item.id} className="flex items-center gap-3 pb-3 border-b last:border-0 last:pb-0">
+                    <div className="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 bg-orange-50 flex items-center justify-center"><PImg p={item} cls="w-12 h-12" eCls="text-2xl"/></div>
+                    <div className="flex-1 min-w-0"><p className="font-bold text-sm truncate">{item.name}</p><p className="text-orange-500 text-sm">R$ {parseFloat(item.price).toFixed(2)}</p></div>
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={()=>chgQty(item.id,-1)} className="bg-gray-100 hover:bg-gray-200 p-1.5 rounded-lg"><Minus size={13}/></button>
+                      <span className="font-bold w-5 text-center text-sm">{item.qty}</span>
+                      <button onClick={()=>chgQty(item.id, 1)} className="bg-orange-500 hover:bg-orange-600 text-white p-1.5 rounded-lg"><Plus size={13}/></button>
+                      <button onClick={()=>setCart(c=>c.filter(i=>i.id!==item.id))} className="bg-red-100 text-red-500 p-1.5 rounded-lg ml-1"><Trash2 size={13}/></button>
                     </div>
                   </div>
                 ))}
               </div>
-              {/* Dados */}
-              <div className="bg-white rounded-2xl shadow-lg p-6">
-                <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Seu nome *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl mb-4 outline-none transition" />
-                <div className="flex gap-2 mb-4">
-                  {[['local','🪑 Local'],['viagem','🛍️ Viagem'],['entrega','🛵 Entrega']].map(([val, label]) => (
-                    <button key={val} onClick={() => setOrderType(val)} className={`flex-1 py-3 rounded-xl font-semibold text-sm transition ${orderType === val ? 'bg-orange-500 text-white shadow-md' : 'bg-gray-200 hover:bg-gray-300'}`}>{label}</button>
+
+              <div className="bg-white rounded-2xl shadow p-4 space-y-3">
+                <input value={name} onChange={e=>setName(e.target.value)} placeholder="Seu nome *" className="w-full px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl outline-none text-sm"/>
+                <div className="grid grid-cols-3 gap-2">
+                  {[['local','🪑 Local'],['viagem','🛍️ Viagem'],['entrega','🛵 Entrega']].map(([v,l])=>(
+                    <button key={v} onClick={()=>setType(v)} className={`py-2.5 rounded-xl text-sm font-bold transition ${type===v?'bg-orange-500 text-white shadow':'bg-gray-100 hover:bg-gray-200 text-gray-600'}`}>{l}</button>
                   ))}
                 </div>
-                {orderType === 'local' && (
-                  <input type="text" value={tableNum} onChange={e => setTableNum(e.target.value)} placeholder="Número da mesa *" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl outline-none transition" />
-                )}
-                {orderType === 'entrega' && (
-                  <div className="space-y-3">
-                    <input type="text" value={address} onChange={e => setAddress(e.target.value)} placeholder="Rua, número, bairro *" className="w-full px-4 py-3 border-2 border-orange-300 focus:border-orange-500 rounded-xl outline-none transition" />
-                    <input type="text" value={addressRef} onChange={e => setAddressRef(e.target.value)} placeholder="Ponto de referência (opcional)" className="w-full px-4 py-3 border-2 border-gray-300 focus:border-orange-500 rounded-xl outline-none transition" />
-                    <div className="flex items-start gap-2 bg-orange-50 border border-orange-200 rounded-xl px-4 py-3">
-                      <span className="text-lg">🛵</span>
-                      <p className="text-xs text-orange-700">A taxa de entrega será combinada diretamente com a loja via WhatsApp.</p>
-                    </div>
+                {type==='local'&&<input value={mesa} onChange={e=>setMesa(e.target.value)} placeholder="Número da mesa *" className="w-full px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl outline-none text-sm"/>}
+                {type==='entrega'&&(
+                  <div className="space-y-2">
+                    <input value={addr} onChange={e=>setAddr(e.target.value)} placeholder="Rua, número, bairro *" className="w-full px-4 py-3 border-2 border-orange-200 focus:border-orange-400 rounded-xl outline-none text-sm"/>
+                    <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="Ponto de referência (opcional)" className="w-full px-4 py-3 border-2 border-gray-200 focus:border-orange-400 rounded-xl outline-none text-sm"/>
+                    <p className="text-xs text-orange-600 bg-orange-50 px-3 py-2 rounded-xl">🛵 Taxa de entrega combinada via WhatsApp</p>
                   </div>
                 )}
               </div>
-              {/* Total */}
-              <div className="bg-white rounded-2xl shadow-lg p-6">
-                <div className="flex justify-between items-center mb-6"><span className="text-xl font-bold">Total</span><span className="text-3xl font-bold text-orange-500">R$ {total.toFixed(2)}</span></div>
-                <button onClick={handleSend} disabled={sending} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition disabled:opacity-50">
-                  {sending ? <Spinner size={22} color="text-white" /> : <Send size={22} />}
-                  {sending ? 'Enviando...' : (currentTenant.whatsapp || currentTenant.phone) ? 'Enviar via WhatsApp' : 'Confirmar Pedido'}
+
+              <div className="bg-white rounded-2xl shadow p-4">
+                <div className="flex justify-between items-center mb-4"><span className="font-bold text-lg">Total</span><span className="text-2xl font-extrabold text-orange-500">R$ {cartT.toFixed(2)}</span></div>
+                <button onClick={send} disabled={snd} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-extrabold text-lg flex items-center justify-center gap-2 hover:brightness-110 disabled:opacity-50">
+                  {snd?<Spin sz={22} c="text-white"/>:<Send size={22}/>}
+                  {snd?'Enviando...':(tenant.whatsapp||tenant.phone)?'Enviar via WhatsApp':'Confirmar Pedido'}
                 </button>
               </div>
-            </div>
+            </>
           )}
         </div>
       </div>
@@ -721,309 +589,239 @@ export default function PedidoRapido() {
   };
 
   // ════════════════════════════════════════════════════════════════
-  // TENANT ADMIN
+  // ADMIN
   // ════════════════════════════════════════════════════════════════
-  const TenantAdminPage = () => {
-    const [showProductModal, setShowProductModal] = useState(false);
-    const [editProduct, setEditProduct]           = useState(null);
-    const [pName, setPName] = useState(''); const [pPrice, setPPrice] = useState('');
-    const [pDesc, setPDesc]         = useState('');
-    const [pCategory, setPCategory] = useState('Geral');
-    const [pImage, setPImage]       = useState('');   // emoji
-    const [pImageUrl, setPImageUrl] = useState('');   // URL real após upload/conversão
-    const [pUploading, setPUploading] = useState(false);
-    const [pSaving, setPSaving]     = useState(false);
-    const [ajNome, setAjNome]     = useState(currentTenant?.name || '');
-    const [ajWpp, setAjWpp]       = useState(currentTenant?.whatsapp || currentTenant?.phone || '');
-    const [ajPw, setAjPw]         = useState('');
-    const [ajSaving, setAjSaving] = useState(false);
+  const AdminPage = () => {
+    const [modal,setModal]=useState(false);
+    const [editP,setEditP]=useState(null);
+    const [pf,setPf]=useState({name:'',price:'',cat:'Geral',desc:'',img:'',imgUrl:''});
+    const [upl,setUpl]=useState(false);
+    const [pSav,setPSav]=useState(false);
+    const [sf,setSf]=useState({name:tenant?.name||'',wpp:tenant?.whatsapp||tenant?.phone||'',pw:''});
+    const [sSav,setSSav]=useState(false);
+    const upd=(k,v)=>setPf(p=>({...p,[k]:v}));
+    const CATS=['Geral','Lanches','Bebidas','Sobremesas','Porções','Combos','Vegano','Outros'];
 
-    const openNewProduct = () => { setEditProduct(null); setPName(''); setPPrice(''); setPDesc(''); setPCategory('Geral'); setPImage(''); setPImageUrl(''); setShowProductModal(true); };
-    const openEditProduct = (p) => {
-      setEditProduct(p); setPName(p.name); setPPrice(String(p.price)); setPDesc(p.description||''); setPCategory(p.category || 'Geral');
-      const img = p.image_url || p.image || '';
-      // se é URL real, coloca em pImageUrl; se é emoji, coloca em pImage
-      if (img.startsWith('http') || img.startsWith('data:')) { setPImageUrl(img); setPImage(''); }
-      else { setPImage(img); setPImageUrl(''); }
-      setShowProductModal(true);
+    const openNew=()=>{setEditP(null);setPf({name:'',price:'',cat:'Geral',desc:'',img:'',imgUrl:''});setModal(true);};
+    const openEdit=(p)=>{
+      setEditP(p);
+      const src=p.image_url||p.image||'';
+      setPf({name:p.name,price:String(p.price),cat:p.category||'Geral',desc:p.description||'',
+             img:realImg(src)?'':src, imgUrl:realImg(src)?src:''});
+      setModal(true);
     };
 
-
-    // ── Converte imagem para WebP e faz upload para Supabase Storage ──
-    const handleImageUpload = async (file) => {
-      if (!file) return;
-      setPUploading(true);
-      try {
-        // Converte para WebP via Canvas
-        const webpBlob = await new Promise((resolve, reject) => {
-          const img = new Image();
-          const url = URL.createObjectURL(file);
-          img.onload = () => {
-            const maxSize = 800;
-            let w = img.width, h = img.height;
-            if (w > maxSize || h > maxSize) {
-              if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
-              else       { w = Math.round(w * maxSize / h); h = maxSize; }
-            }
-            const canvas = document.createElement('canvas');
-            canvas.width = w; canvas.height = h;
-            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-            canvas.toBlob(b => b ? resolve(b) : reject(new Error('Conversão falhou')), 'image/webp', 0.85);
+    const uploadImg=async(file)=>{
+      if(!file)return;setUpl(true);
+      try{
+        const blob=await new Promise((res,rej)=>{
+          const img=new Image(),url=URL.createObjectURL(file);
+          img.onload=()=>{
+            const max=800,w=img.width,h=img.height;
+            const [nw,nh]=w>h?[max,Math.round(h*max/w)]:[Math.round(w*max/h),max];
+            const c=document.createElement('canvas');c.width=Math.min(w,nw);c.height=Math.min(h,nh);
+            c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+            c.toBlob(b=>b?res(b):rej(new Error('Falhou')),'image/webp',0.85);
             URL.revokeObjectURL(url);
-          };
-          img.onerror = reject;
-          img.src = url;
+          };img.onerror=rej;img.src=url;
         });
-
-        // Tenta upload para Supabase Storage, com fallback para base64
-        const fileName = `${currentTenant.id}/${Date.now()}.webp`;
-        const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/products/${fileName}`, {
-          method: 'POST',
-          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'image/webp', 'x-upsert': 'true' },
-          body: webpBlob,
+        const fn=`${tenant.id}/${Date.now()}.webp`;
+        const up=await fetch(`${SUPABASE_URL}/storage/v1/object/products/${fn}`,{
+          method:'POST',headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'image/webp','x-upsert':'true'},body:blob,
         });
-
-        if (uploadRes.ok) {
-          // Storage funcionou — usa URL pública
-          const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/products/${fileName}`;
-          setPImageUrl(publicUrl);
-          setPImage('');
-          showToast('Imagem enviada! ✅');
-        } else {
-          // Storage não configurado — converte para base64 e salva no campo image
-          await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = e => {
-              setPImageUrl(e.target.result);
-              setPImage('');
-              resolve();
-            };
-            reader.readAsDataURL(webpBlob);
-          });
-          showToast('Imagem carregada! ✅ (Para persistir entre sessões, crie o bucket "products" no Supabase Storage)');
-        }
-      } catch (e) {
-        showToast(`Erro no upload: ${e.message}`, 'error');
-      } finally {
-        setPUploading(false);
-      }
+        if(up.ok){upd('imgUrl',`${SUPABASE_URL}/storage/v1/object/public/products/${fn}`);upd('img','');toast$('Imagem enviada! ✅');}
+        else{await new Promise(r=>{const rd=new FileReader();rd.onload=e=>{upd('imgUrl',e.target.result);upd('img','');r();};rd.readAsDataURL(blob);});toast$('Imagem carregada! ✅');}
+      }catch(e){toast$(`Erro: ${e.message}`,'error');}
+      finally{setUpl(false);}
     };
 
-    const saveProduct = async () => {
-      if (!pName.trim() || !pPrice) { showToast('Nome e preço obrigatórios', 'error'); return; }
-      setPSaving(true);
-      try {
-        if (editProduct) {
-          const imgVal = pImageUrl || pImage || null;
-          await apiUpdate('products', 'id', editProduct.id, {
-            name:        pName,
-            price:       parseFloat(pPrice),
-            category:    pCategory || 'Geral',
-            description: pDesc || null,
-            image:       imgVal,
-          });
-        } else {
-          // Schema exato confirmado da tabela products:
-          // id(auto), store_id, name(NOT NULL), price(NOT NULL), category(NOT NULL),
-          // description, image, extras, is_available, track_inventory, created_at, tenant_id, available
-          const imgVal = pImageUrl || pImage || null;
-          await apiInsert('products', {
-            tenant_id:    currentTenant.id,  // tenant_id NÃO tem FK — é safe
-            name:         pName,
-            price:        parseFloat(pPrice),
-            category:     pCategory || 'Geral',
-            description:  pDesc     || null,
+    const saveProd=async()=>{
+      if(!pf.name.trim()||!pf.price){toast$('Nome e preço obrigatórios','error');return;}
+      setPSav(true);
+      try{
+        const imgVal=pf.imgUrl||pf.img||null;
+        if(editP){
+          // Update — só campos que têm no schema e não tem FK problemática
+          await dbUpdate('products',editP.id,{name:pf.name,price:parseFloat(pf.price),category:pf.cat||'Geral',description:pf.desc||null,image:imgVal});
+        }else{
+          // Insert com schema exato confirmado de products
+          // Usa tenant_id (sem FK) — NÃO usa store_id (FK→stores, inválida para tenants)
+          await dbInsert('products',{
+            tenant_id:    tenant.id,
+            store_id:     tenant.id,   // após DROP CONSTRAINT funciona livremente
+            name:         pf.name,
+            price:        parseFloat(pf.price),
+            category:     pf.cat||'Geral',
+            description:  pf.desc||null,
             image:        imgVal,
             is_available: true,
             available:    true,
             extras:       [],
           });
         }
-        showToast(editProduct ? 'Produto atualizado!' : 'Produto criado!');
-        setShowProductModal(false); reloadProducts(currentTenant.id);
-      } catch (e) { showToast(`Erro: ${e.message}`, 'error'); }
-      finally     { setPSaving(false); }
+        toast$(editP?'Produto atualizado! ✅':'Produto criado! ✅');
+        setModal(false);loadProducts(tenant.id);
+      }catch(e){toast$(`Erro: ${e.message}`,'error');}
+      finally{setPSav(false);}
     };
 
-    const saveAjustes = async () => {
-      setAjSaving(true);
-      try {
-        const data = { name: ajNome, whatsapp: ajWpp, phone: ajWpp };
-        if (ajPw.trim()) data.password = ajPw;
-        await apiUpdate('tenants', 'id', currentTenant.id, data);
-        setCurrentTenant(prev => ({ ...prev, ...data }));
-        showToast('Configurações salvas!');
-      } catch (e) { showToast(`Erro: ${e.message}`, 'error'); }
-      finally     { setAjSaving(false); }
-    };
+    const TABS=[{id:'resumo',label:'Resumo',Icon:LayoutDashboard},{id:'cozinha',label:'Cozinha',Icon:ChefHat},{id:'cardapio',label:'Cardápio',Icon:UtensilsCrossed},{id:'ajustes',label:'Ajustes',Icon:Settings}];
 
-    const TABS = [
-      { id:'resumo',   label:'Resumo',   Icon: LayoutDashboard },
-      { id:'cozinha',  label:'Cozinha',  Icon: ChefHat         },
-      { id:'cardapio', label:'Cardápio', Icon: UtensilsCrossed },
-      { id:'ajustes',  label:'Ajustes',  Icon: Settings        },
-    ];
-
-    return (
-      <div className="min-h-screen bg-gray-100 pb-24">
-        <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white p-4 shadow-lg">
-          <div className="max-w-5xl mx-auto flex justify-between items-center">
-            <div><h1 className="text-xl font-extrabold">{currentTenant.name}</h1><p className="text-orange-100 text-xs">Painel Administrativo</p></div>
+    return(
+      <div className="min-h-screen bg-gray-100 pb-20">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white p-4 shadow">
+          <div className="max-w-4xl mx-auto flex justify-between items-center">
+            <div><p className="font-extrabold text-lg">{tenant.name}</p><p className="text-xs opacity-70">Painel Admin</p></div>
             <div className="flex gap-2">
-              <button onClick={() => go('menu')} className="flex items-center gap-1 bg-white/20 hover:bg-white/30 px-3 py-2 rounded-lg text-sm transition"><Store size={15} /> Cardápio</button>
-              <button onClick={() => { setTenantAdminAuth(false); setView('menu'); }} className="flex items-center gap-1 bg-white/20 hover:bg-white/30 px-3 py-2 rounded-lg text-sm transition"><LogOut size={15} /> Sair</button>
+              <button onClick={()=>go('menu')} className="bg-white/20 hover:bg-white/30 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><Store size={14}/> Cardápio</button>
+              <button onClick={()=>{setAdminAuth(false);setView('menu');}} className="bg-white/20 hover:bg-white/30 px-3 py-2 rounded-lg text-sm flex items-center gap-1"><LogOut size={14}/> Sair</button>
             </div>
           </div>
         </div>
+        {/* Tabs */}
         <div className="bg-white border-b sticky top-0 z-20 shadow-sm">
-          <div className="max-w-5xl mx-auto flex overflow-x-auto">
-            {TABS.map(({ id, label, Icon }) => (
-              <button key={id} onClick={() => setAdminTab(id)} className={`flex items-center gap-2 px-5 py-4 text-sm font-bold whitespace-nowrap border-b-2 transition ${adminTab === id ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-800'}`}><Icon size={17} /> {label}</button>
+          <div className="max-w-4xl mx-auto flex overflow-x-auto">
+            {TABS.map(({id,label,Icon})=>(
+              <button key={id} onClick={()=>setTab(id)} className={`flex items-center gap-2 px-5 py-4 text-sm font-bold whitespace-nowrap border-b-2 transition ${tab===id?'border-orange-500 text-orange-600':'border-transparent text-gray-400 hover:text-gray-700'}`}><Icon size={15}/>{label}</button>
             ))}
           </div>
         </div>
-        <div className="max-w-5xl mx-auto px-4 py-6">
 
-          {/* RESUMO */}
-          {adminTab === 'resumo' && (
+        <div className="max-w-4xl mx-auto p-4">
+
+          {/* ─ RESUMO ─ */}
+          {tab==='resumo'&&(
             <div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-                {[{label:'Total Pedidos',value:orders.length,color:'text-orange-500'},{label:'Aguardando',value:orders.filter(o=>['pending','aguardando'].includes(o.status)).length,color:'text-yellow-500'},{label:'Entregues',value:orders.filter(o=>o.status==='delivered').length,color:'text-green-500'},{label:'Itens Ativos',value:products.filter(isAvailable).length,color:'text-blue-500'}].map(s=>(
-                  <div key={s.label} className="bg-white rounded-2xl p-4 shadow text-center"><p className={`text-3xl font-extrabold ${s.color}`}>{s.value}</p><p className="text-gray-500 text-xs mt-1">{s.label}</p></div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+                {[['Pedidos',orders.length,'text-orange-500'],['Aguardando',orders.filter(o=>['Received','pending'].includes(o.status)).length,'text-yellow-500'],['Entregues',orders.filter(o=>o.status==='Delivered').length,'text-green-500'],['Produtos',products.filter(isAvail).length,'text-blue-500']].map(([l,v,c])=>(
+                  <div key={l} className="bg-white rounded-xl p-4 shadow text-center"><p className={`text-3xl font-extrabold ${c}`}>{v}</p><p className="text-gray-400 text-xs mt-0.5">{l}</p></div>
                 ))}
               </div>
-              <h3 className="font-bold text-gray-700 mb-3">Últimos pedidos</h3>
-              {loadingOrders ? <div className="flex justify-center py-8"><Spinner /></div> : (
-                <div className="space-y-3">
-                  {orders.slice(0,6).map(o => (
-                    <div key={o.id} className="bg-white rounded-2xl p-4 shadow flex justify-between items-center">
-                      <div><p className="font-bold">{o.customer_name}</p><p className="text-sm text-gray-500">R$ {parseFloat(o.total||0).toFixed(2)}</p><p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleString('pt-BR')}</p></div>
-                      <span className={`text-xs font-bold px-3 py-1 rounded-full ${STATUS_COLORS[o.status]||'bg-gray-100'}`}>{STATUS_LABELS[o.status]||o.status}</span>
+              <h3 className="font-bold text-gray-500 text-xs uppercase tracking-wide mb-3">Últimos pedidos</h3>
+              {loadOrds?<div className="flex justify-center py-8"><Spin/></div>:(
+                <div className="space-y-2">
+                  {orders.slice(0,8).map(o=>{const s=st(o.status);return(
+                    <div key={o.id} className="bg-white rounded-xl p-4 shadow flex justify-between items-center">
+                      <div><p className="font-bold text-sm">{o.customer_name}</p><p className="text-xs text-gray-400">R$ {parseFloat(o.total||0).toFixed(2)} · {new Date(o.created_at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</p></div>
+                      <span className={`text-xs font-bold px-3 py-1 rounded-full ${s.color}`}>{s.label}</span>
                     </div>
-                  ))}
-                  {orders.length === 0 && !loadingOrders && <p className="text-center text-gray-400 py-8">Nenhum pedido ainda</p>}
+                  );})}
+                  {orders.length===0&&<p className="text-center text-gray-400 py-8 text-sm">Nenhum pedido ainda</p>}
                 </div>
               )}
             </div>
           )}
 
-          {/* COZINHA */}
-          {adminTab === 'cozinha' && (
+          {/* ─ COZINHA ─ */}
+          {tab==='cozinha'&&(
             <div>
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-extrabold">Pedidos em Tempo Real</h2>
-                <button onClick={() => loadOrders(currentTenant.id)} className="text-orange-500 hover:text-orange-600 p-2 hover:bg-orange-50 rounded-lg transition"><RefreshCw size={20} /></button>
+                <h2 className="font-extrabold text-lg">Pedidos ao Vivo</h2>
+                <button onClick={()=>loadOrders(tenant.id)} className="p-2 text-orange-500 hover:bg-orange-50 rounded-xl"><RefreshCw size={20}/></button>
               </div>
-              {loadingOrders ? <div className="flex justify-center py-12"><Spinner size={40} /></div> :
-               orders.length === 0 ? <div className="text-center py-16 text-gray-400"><ClipboardList size={56} className="mx-auto mb-3 opacity-30" /><p>Nenhum pedido ainda</p></div> : (
-                <div className="space-y-4">
-                  {orders.map(o => (
-                    <div key={o.id} className={`bg-white rounded-2xl p-5 shadow border-l-4 ${['pending','aguardando'].includes(o.status)?'border-yellow-400':o.status==='preparing'?'border-blue-400':o.status==='ready'?'border-green-400':'border-gray-200'}`}>
-                      <div className="flex justify-between items-start mb-3">
+              {loadOrds?<div className="flex justify-center py-16"><Spin sz={40}/></div>:
+               orders.length===0?<div className="text-center py-16 text-gray-300"><ClipboardList size={64} className="mx-auto mb-3"/><p>Nenhum pedido</p></div>:(
+                <div className="space-y-3">
+                  {orders.map(o=>{const s=st(o.status);const items=parseItems(o);return(
+                    <div key={o.id} className={`bg-white rounded-2xl p-4 shadow border-l-4 ${s.border}`}>
+                      <div className="flex justify-between items-start mb-2">
                         <div>
-                          <p className="font-extrabold text-lg">{o.customer_name}</p>
+                          <p className="font-extrabold">{o.customer_name}</p>
                           <p className="text-sm text-gray-500">
-                            {o.delivery_method === 'local'   && '🪑 Local'}
-                            {o.delivery_method === 'viagem'  && '🛍️ Viagem'}
-                            {o.delivery_method === 'entrega' && '🛵 Entrega'}
+                            {o.delivery_method==='local'&&`🪑 Mesa ${o.table_number||'-'}`}
+                            {o.delivery_method==='viagem'&&'🛍️ Para viagem'}
+                            {o.delivery_method==='entrega'&&`🛵 ${o.address||'Endereço não informado'}`}
                           </p>
-                          <p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleTimeString('pt-BR')}</p>
+                          <p className="text-xs text-gray-400">{new Date(o.created_at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</p>
                         </div>
-                        <span className={`text-xs font-bold px-3 py-1 rounded-full ${STATUS_COLORS[o.status]||'bg-gray-100'}`}>{STATUS_LABELS[o.status]||o.status}</span>
+                        <span className={`text-xs font-bold px-3 py-1 rounded-full ${s.color}`}>{s.label}</span>
                       </div>
-                      <div className="mb-3 bg-gray-50 rounded-xl p-3 space-y-1">
-                        {parseItems(o).map((item, idx) => (
-                          <div key={idx} className="flex justify-between text-sm"><span>{item.image||''} {item.qty}x {item.name}</span><span className="text-gray-500 font-semibold">R$ {(parseFloat(item.price)*item.qty).toFixed(2)}</span></div>
+                      <div className="bg-gray-50 rounded-xl p-3 mb-3 space-y-1">
+                        {items.map((it,i)=>(
+                          <div key={i} className="flex justify-between text-sm">
+                            <span>{it.qty}x {it.name}</span>
+                            <span className="font-semibold text-gray-500">R$ {(parseFloat(it.price||0)*it.qty).toFixed(2)}</span>
+                          </div>
                         ))}
                       </div>
-                      <div className="flex justify-between items-center flex-wrap gap-2">
-                        <span className="font-bold text-orange-600">R$ {parseFloat(o.total||0).toFixed(2)}</span>
-                        <div className="flex gap-2 flex-wrap">
-                          {['pending','aguardando'].includes(o.status) && <button onClick={()=>updateOrderStatus(o.id,'preparing')} className="bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-600 transition">Preparar</button>}
-                          {o.status==='preparing' && <button onClick={()=>updateOrderStatus(o.id,'ready')} className="bg-green-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-600 transition">Pronto! ✅</button>}
-                          {o.status==='ready' && <button onClick={()=>updateOrderStatus(o.id,'delivered')} className="bg-gray-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-700 transition">Entregue</button>}
-                          {!['cancelled','delivered'].includes(o.status) && <button onClick={()=>updateOrderStatus(o.id,'cancelled')} className="bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-200 transition">Cancelar</button>}
+                      {o.notes&&<p className="text-xs text-gray-400 italic mb-2">📝 {o.notes}</p>}
+                      <div className="flex justify-between items-center">
+                        <span className="font-extrabold text-orange-500">R$ {parseFloat(o.total||0).toFixed(2)}</span>
+                        <div className="flex gap-2">
+                          {o.status==='Received'  &&<button onClick={()=>updStatus(o.id,'Preparing')} className="bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-600">👨‍🍳 Preparar</button>}
+                          {o.status==='Preparing' &&<button onClick={()=>updStatus(o.id,'Ready')}     className="bg-green-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-600">✅ Pronto</button>}
+                          {o.status==='Ready'     &&<button onClick={()=>updStatus(o.id,'Delivered')} className="bg-gray-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-700">📦 Entregue</button>}
+                          {!['Delivered','Cancelled'].includes(o.status)&&<button onClick={()=>updStatus(o.id,'Cancelled')} className="bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-200">✕ Cancelar</button>}
                         </div>
                       </div>
                     </div>
-                  ))}
+                  );})}
                 </div>
               )}
             </div>
           )}
 
-          {/* CARDÁPIO */}
-          {adminTab === 'cardapio' && (
+          {/* ─ CARDÁPIO ─ */}
+          {tab==='cardapio'&&(
             <div>
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-extrabold">Gerenciar Cardápio</h2>
-                <button onClick={openNewProduct} className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-xl font-bold hover:bg-orange-600 transition text-sm"><PlusCircle size={17} /> Novo Item</button>
+                <h2 className="font-extrabold text-lg">Gerenciar Cardápio</h2>
+                <button onClick={openNew} className="bg-orange-500 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-1 hover:bg-orange-600"><PlusCircle size={15}/> Novo</button>
               </div>
-              {products.length === 0 ? <div className="text-center py-16 text-gray-400"><Package size={56} className="mx-auto mb-3 opacity-30" /><p>Nenhum produto cadastrado</p></div> : (
-                <div className="space-y-3">
-                  {products.map(p => (
-                    <div key={p.id} className="bg-white rounded-2xl p-4 shadow flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 bg-orange-50 flex items-center justify-center">
-                        {(p.image_url || (p.image && (p.image.startsWith('http') || p.image.startsWith('data:')))) ? (
-                          <img src={p.image_url || p.image} alt={p.name} className="w-full h-full object-cover" />
-                        ) : (
-                          <span className="text-2xl">{p.image || '🍔'}</span>
-                        )}
+              {products.length===0?<div className="text-center py-16 text-gray-300"><Package size={64} className="mx-auto mb-3"/><p>Nenhum produto</p></div>:(
+                <div className="space-y-2">
+                  {products.map(p=>(
+                    <div key={p.id} className="bg-white rounded-xl p-3 shadow flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 bg-orange-50 flex items-center justify-center"><PImg p={p} cls="w-12 h-12" eCls="text-2xl"/></div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-sm truncate">{p.name}</p>
+                        <p className="text-orange-500 text-sm font-bold">R$ {parseFloat(p.price||0).toFixed(2)}</p>
+                        <p className="text-gray-400 text-xs">{p.category}</p>
                       </div>
-                      <div className="flex-1 min-w-0"><p className="font-bold truncate">{p.name}</p><p className="text-orange-600 font-bold text-sm">R$ {parseFloat(p.price||0).toFixed(2)}</p>{p.description&&<p className="text-gray-400 text-xs truncate">{p.description}</p>}</div>
                       <div className="flex items-center gap-1 flex-shrink-0">
-                        <button onClick={async()=>{ const v=!isAvailable(p); await apiUpdate('products','id',p.id,{available:v}); setProducts(prev=>prev.map(x=>x.id===p.id?{...x,available:v}:x)); showToast(v?'Ativado ✅':'Desativado'); }} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${isAvailable(p)?'bg-green-100 text-green-700 hover:bg-green-200':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{isAvailable(p)?'✅ Disponível':'❌ Inativo'}</button>
-                        <button onClick={()=>openEditProduct(p)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg transition"><Edit2 size={15} /></button>
-                        <button onClick={async()=>{ if(!window.confirm(`Excluir "${p.name}"?`))return; await apiDelete('products','id',p.id); setProducts(prev=>prev.filter(x=>x.id!==p.id)); showToast('Excluído'); }} className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition"><Trash size={15} /></button>
+                        <button onClick={async()=>{const v=!isAvail(p);await dbUpdate('products',p.id,{is_available:v,available:v});setProducts(pr=>pr.map(x=>x.id===p.id?{...x,is_available:v,available:v}:x));toast$(v?'Ativado ✅':'Desativado');}} className={`px-2 py-1 rounded-lg text-xs font-bold ${isAvail(p)?'bg-green-100 text-green-700':'bg-gray-100 text-gray-500'}`}>{isAvail(p)?'✅':'❌'}</button>
+                        <button onClick={()=>openEdit(p)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg"><Edit2 size={14}/></button>
+                        <button onClick={async()=>{if(!window.confirm(`Excluir "${p.name}"?`))return;await dbDelete('products',p.id);setProducts(pr=>pr.filter(x=>x.id!==p.id));toast$('Excluído');}} className="p-2 text-red-400 hover:bg-red-50 rounded-lg"><Trash size={14}/></button>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-              {showProductModal && (
+              {modal&&(
                 <Overlay>
-                  <div className="bg-white rounded-3xl p-6 shadow-2xl w-full max-w-md">
-                    <div className="flex justify-between items-center mb-5"><h3 className="text-xl font-extrabold">{editProduct?'Editar Produto':'Novo Produto'}</h3><button onClick={()=>setShowProductModal(false)} className="text-gray-400 hover:text-gray-700"><X size={22} /></button></div>
+                  <div className="bg-white rounded-3xl p-6 shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+                    <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-extrabold">{editP?'Editar':'Novo Produto'}</h3><button onClick={()=>setModal(false)}><X size={22} className="text-gray-400"/></button></div>
                     <div className="space-y-3">
-                      <input placeholder="Nome do produto *" value={pName} onChange={e=>setPName(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
+                      <input placeholder="Nome do produto *" value={pf.name} onChange={e=>upd('name',e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/>
                       <div className="flex gap-2">
-                        <input placeholder="Preço (ex: 15.90) *" value={pPrice} onChange={e=>setPPrice(e.target.value)} type="number" step="0.01" min="0" className="flex-1 border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
-                        <select value={pCategory} onChange={e=>setPCategory(e.target.value)} className="flex-1 border-2 border-gray-200 rounded-xl px-3 py-3 text-sm focus:border-orange-400 outline-none bg-white">
-                          {['Geral','Lanches','Bebidas','Sobremesas','Porções','Combos','Vegano','Outros'].map(c=>(
-                            <option key={c} value={c}>{c}</option>
-                          ))}
+                        <input placeholder="Preço *" value={pf.price} onChange={e=>upd('price',e.target.value)} type="number" step="0.01" min="0" className="flex-1 border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/>
+                        <select value={pf.cat} onChange={e=>upd('cat',e.target.value)} className="flex-1 border-2 border-gray-200 rounded-xl px-3 py-3 text-sm focus:border-orange-400 outline-none bg-white">
+                          {CATS.map(c=><option key={c} value={c}>{c}</option>)}
                         </select>
                       </div>
-                      <textarea placeholder="Descrição (opcional)" value={pDesc} onChange={e=>setPDesc(e.target.value)} rows={2} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none resize-none" />
-                      {/* Upload de imagem real */}
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-500 block">Foto do Produto</label>
-                        {(pImageUrl) ? (
-                          <div className="relative w-full h-40 rounded-xl overflow-hidden border-2 border-orange-300">
-                            <img src={pImageUrl} alt="preview" className="w-full h-full object-cover" />
-                            <button onClick={() => { setPImageUrl(''); setPImage(''); }} className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-7 h-7 flex items-center justify-center shadow"><X size={14} /></button>
+                      <textarea placeholder="Descrição (opcional)" value={pf.desc} onChange={e=>upd('desc',e.target.value)} rows={2} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none resize-none"/>
+                      {/* Image */}
+                      <div>
+                        <label className="text-xs font-bold text-gray-400 block mb-2">Foto do Produto</label>
+                        {pf.imgUrl?(
+                          <div className="relative h-32 rounded-xl overflow-hidden border-2 border-orange-200">
+                            <img src={pf.imgUrl} alt="preview" className="w-full h-full object-cover"/>
+                            <button onClick={()=>{upd('imgUrl','');upd('img','');}} className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-7 h-7 flex items-center justify-center shadow"><X size={13}/></button>
                           </div>
-                        ) : (
-                          <label className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer transition ${pUploading ? 'border-orange-400 bg-orange-50' : 'border-gray-300 hover:border-orange-400 hover:bg-orange-50'}`}>
-                            {pUploading ? (
-                              <><Spinner size={28} /><span className="text-xs text-orange-500 mt-2">Convertendo para WebP...</span></>
-                            ) : (
-                              <><span className="text-3xl mb-1">📷</span><span className="text-xs text-gray-500 font-semibold">Tirar foto ou escolher da galeria</span><span className="text-xs text-gray-400">JPG, PNG, HEIC → converte para WebP</span></>
-                            )}
-                            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => e.target.files[0] && handleImageUpload(e.target.files[0])} />
+                        ):(
+                          <label className={`flex flex-col items-center justify-center h-24 border-2 border-dashed rounded-xl cursor-pointer transition ${upl?'border-orange-400 bg-orange-50':'border-gray-200 hover:border-orange-300 hover:bg-orange-50'}`}>
+                            {upl?<><Spin sz={22}/><span className="text-xs text-orange-500 mt-1">Convertendo...</span></>:<><Camera size={24} className="text-gray-300 mb-1"/><span className="text-xs text-gray-400">Foto ou galeria → WebP automático</span></>}
+                            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>e.target.files[0]&&uploadImg(e.target.files[0])}/>
                           </label>
                         )}
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-px bg-gray-200" />
-                          <span className="text-xs text-gray-400">ou use emoji</span>
-                          <div className="flex-1 h-px bg-gray-200" />
-                        </div>
-                        <input placeholder="Emoji (ex: 🍔 🍕 🌮)" value={pImage} onChange={e => { setPImage(e.target.value); setPImageUrl(''); }} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:border-orange-400 outline-none" />
+                        <div className="flex items-center gap-2 mt-2"><div className="flex-1 h-px bg-gray-100"/><span className="text-xs text-gray-300">ou emoji</span><div className="flex-1 h-px bg-gray-100"/></div>
+                        <input placeholder="🍔 🍕 🌮" value={pf.img} onChange={e=>{upd('img',e.target.value);upd('imgUrl','');}} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:border-orange-400 outline-none mt-1"/>
                       </div>
                     </div>
-                    <div className="flex gap-3 mt-6">
-                      <button onClick={()=>setShowProductModal(false)} className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50 transition">Cancelar</button>
-                      <button onClick={saveProduct} disabled={pSaving} className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-bold hover:brightness-110 transition disabled:opacity-50 flex items-center justify-center gap-2">{pSaving?<Spinner size={18} color="text-white"/>:<CheckCircle size={18}/>}{editProduct?'Salvar':'Criar'}</button>
+                    <div className="flex gap-3 mt-5">
+                      <button onClick={()=>setModal(false)} className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50">Cancelar</button>
+                      <button onClick={saveProd} disabled={pSav||upl} className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-bold hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2">{pSav?<Spin sz={15} c="text-white"/>:<CheckCircle size={15}/>}{editP?'Salvar':'Criar'}</button>
                     </div>
                   </div>
                 </Overlay>
@@ -1031,16 +829,16 @@ export default function PedidoRapido() {
             </div>
           )}
 
-          {/* AJUSTES */}
-          {adminTab === 'ajustes' && (
+          {/* ─ AJUSTES ─ */}
+          {tab==='ajustes'&&(
             <div className="max-w-md">
-              <h2 className="text-lg font-extrabold text-gray-800 mb-5">Ajustes da Loja</h2>
+              <h2 className="font-extrabold text-lg mb-4">Ajustes da Loja</h2>
               <div className="bg-white rounded-2xl p-5 shadow space-y-4">
-                <div><label className="text-sm font-bold text-gray-600 block mb-1">Nome da Loja</label><input value={ajNome} onChange={e=>setAjNome(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" /></div>
-                <div><label className="text-sm font-bold text-gray-600 block mb-1">WhatsApp (com DDI: 5585999999999)</label><input value={ajWpp} onChange={e=>setAjWpp(e.target.value.replace(/[^0-9]/g,''))} placeholder="5585999999999" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" /></div>
-                <div><label className="text-sm font-bold text-gray-600 block mb-1">Nova senha admin (em branco = não altera)</label><input type="password" value={ajPw} onChange={e=>setAjPw(e.target.value)} placeholder="Nova senha" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" /></div>
-                <div><label className="text-sm font-bold text-gray-600 block mb-1">Link do cardápio</label><div className="bg-gray-50 rounded-xl px-4 py-3 text-sm text-orange-600 font-mono break-all select-all">{window.location.origin}/{currentTenant?.slug}</div></div>
-                <button onClick={saveAjustes} disabled={ajSaving} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 transition disabled:opacity-50 flex items-center justify-center gap-2">{ajSaving?<Spinner size={18} color="text-white"/>:<CheckCircle size={18}/>}Salvar Alterações</button>
+                <div><label className="text-xs font-bold text-gray-400 block mb-1">Nome</label><input value={sf.name} onChange={e=>setSf(p=>({...p,name:e.target.value}))} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/></div>
+                <div><label className="text-xs font-bold text-gray-400 block mb-1">WhatsApp</label><input value={sf.wpp} onChange={e=>setSf(p=>({...p,wpp:e.target.value.replace(/\D/g,'')}))} placeholder="5585999999999" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/></div>
+                <div><label className="text-xs font-bold text-gray-400 block mb-1">Nova senha (branco = não altera)</label><input type="password" value={sf.pw} onChange={e=>setSf(p=>({...p,pw:e.target.value}))} placeholder="Nova senha" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/></div>
+                <div><label className="text-xs font-bold text-gray-400 block mb-1">Link do cardápio</label><div className="bg-gray-50 rounded-xl px-4 py-3 text-sm text-orange-500 font-mono break-all select-all">{window.location.origin}/{tenant?.slug}</div></div>
+                <button onClick={async()=>{setSSav(true);try{const d={name:sf.name,whatsapp:sf.wpp,phone:sf.wpp};if(sf.pw.trim())d.password=sf.pw;await dbUpdate('tenants',tenant.id,d);setTenant(p=>({...p,...d}));toast$('Salvo! ✅');}catch(e){toast$(`Erro: ${e.message}`,'error');}finally{setSSav(false);}}} disabled={sSav} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2">{sSav?<Spin sz={15} c="text-white"/>:<CheckCircle size={15}/>} Salvar</button>
               </div>
             </div>
           )}
@@ -1049,22 +847,20 @@ export default function PedidoRapido() {
     );
   };
 
-  // ════════════════════════════════════════════════════════════════
-  // RENDER
-  // ════════════════════════════════════════════════════════════════
-  return (
+  // ─── RENDER ───────────────────────────────────────────────────────────────────
+  return(
     <>
-      {loading && !['menu','tenant-admin','saas-dashboard'].includes(view) && <LoadingOverlay text="Carregando..." />}
-      {view === 'loading'        && <LoadingOverlay text="Iniciando..." />}
-      {view === 'home'           && <HomePage />}
-      {view === 'select'         && <SelectPage />}
-      {view === 'register'       && <RegisterPage />}
-      {view === 'saas-login'     && <SaasLoginPage />}
-      {view === 'saas-dashboard' && <SaasDashboard />}
-      {view === 'menu'           && <MenuPage />}
-      {view === 'cart'           && <CartPage />}
-      {view === 'tenant-admin'   && <TenantAdminPage />}
-      {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+      {loading&&!['menu','admin','saas'].includes(view)&&<Loading/>}
+      {view==='loading'   &&<Loading text="Iniciando..."/>}
+      {view==='home'      &&<HomePage/>}
+      {view==='select'    &&<SelectPage/>}
+      {view==='register'  &&<RegisterPage/>}
+      {view==='saas-login'&&<SaasLogin/>}
+      {view==='saas'      &&<SaasDash/>}
+      {view==='menu'      &&<MenuPage/>}
+      {view==='cart'      &&<CartPage/>}
+      {view==='admin'     &&<AdminPage/>}
+      {toast&&<Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
     </>
   );
 }
