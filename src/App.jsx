@@ -68,6 +68,10 @@ const apiDelete = async (table, column, value) => {
   await fetch(url.toString(), { method: 'DELETE', headers: apiHeaders() });
 };
 
+// ─── CACHE DE SCHEMA ─────────────────────────────────────────────────────────
+// Guarda qual coluna FK de orders funciona para não repetir tentativas
+const _schemaCache = { ordersFk: null };
+
 // ─── COMPONENTES BASE ────────────────────────────────────────────────────────
 
 const Overlay = ({ children }) => (
@@ -793,15 +797,41 @@ export default function PedidoRapido() {
 
         // Envia apenas colunas que existem na tabela orders
         // customer_name inclui nome + tipo para exibição na cozinha
-        await apiInsert('orders', {
-          store_id:      currentTenant.id,
-          tenant_id:     currentTenant.id,
+        const orderPayload = {
           customer_name: `${name} (${locationLabel})`,
           items:         cart,
           total,
           status:        'aguardando',
           created_at:    new Date().toISOString(),
-        });
+        };
+
+        // Usa FK cacheada ou descobre qual coluna existe
+        if (_schemaCache.ordersFk) {
+          // FK já conhecida — insere direto
+          const fk = _schemaCache.ordersFk;
+          await apiInsert('orders', fk === 'none' ? orderPayload : { ...orderPayload, [fk]: currentTenant.id });
+        } else {
+          // Descobre qual FK existe tentando cada opção
+          let inserted = false;
+          for (const fkField of ['store_id', 'tenant_id', 'lanchonete_id', 'restaurante_id']) {
+            try {
+              await apiInsert('orders', { ...orderPayload, [fkField]: currentTenant.id });
+              _schemaCache.ordersFk = fkField; // cacheia para próximas vezes
+              inserted = true;
+              break;
+            } catch (fkErr) {
+              const msg = fkErr.message || '';
+              if (!msg.includes('column') && !msg.includes('schema') && !msg.includes('cache')) {
+                throw fkErr; // erro real (não é coluna inexistente)
+              }
+            }
+          }
+          if (!inserted) {
+            // Sem FK — tabela só tem campos básicos
+            await apiInsert('orders', orderPayload);
+            _schemaCache.ordersFk = 'none';
+          }
+        }
 
         const wp = currentTenant.whatsapp || currentTenant.phone;
         if (wp) {
