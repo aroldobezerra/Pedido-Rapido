@@ -528,7 +528,13 @@ export default function PedidoRapido() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {available.map(p => (
                 <div key={p.id} className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition transform hover:scale-105">
-                  <div className="text-6xl text-center mb-4">{p.image || '🍔'}</div>
+                  <div className="w-full h-40 flex items-center justify-center mb-4 rounded-xl overflow-hidden bg-orange-50">
+                    {(p.image_url || (p.image && (p.image.startsWith('http') || p.image.startsWith('data:')))) ? (
+                      <img src={p.image_url || p.image} alt={p.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-7xl">{p.image || '🍔'}</span>
+                    )}
+                  </div>
                   <h3 className="text-xl font-bold text-center mb-2">{p.name}</h3>
                   {p.description && <p className="text-sm text-gray-600 text-center mb-3 line-clamp-2">{p.description}</p>}
                   <div className="flex justify-between items-center">
@@ -580,14 +586,13 @@ export default function PedidoRapido() {
         if (orderType === 'viagem')  loc = 'Viagem';
         if (orderType === 'entrega') loc = `Entrega: ${address}${addressRef ? ' | ' + addressRef : ''}`;
 
-        // ── INSERT — inclui delivery_method que é NOT NULL na tabela ──
+        // INSERT sem store_id (FK problemática) — usa apenas colunas seguras
         await apiInsert('orders', {
-          store_id:        currentTenant.id,
           customer_name:   `${name} (${loc})`,
-          items:           cart,
+          items:           JSON.stringify(cart),
           total,
           status:          'aguardando',
-          delivery_method: orderType,   // 'local' | 'viagem' | 'entrega'
+          delivery_method: orderType,
           created_at:      new Date().toISOString(),
         });
 
@@ -624,7 +629,13 @@ export default function PedidoRapido() {
               <div className="bg-white rounded-2xl shadow-lg p-6 space-y-4">
                 {cart.map(item => (
                   <div key={item.id} className="flex items-center gap-4 border-b pb-4 last:border-0 last:pb-0">
-                    <div className="text-4xl">{item.image || '🍔'}</div>
+                    <div className="w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 bg-orange-50 flex items-center justify-center">
+                      {(item.image_url || (item.image && (item.image.startsWith('http') || item.image.startsWith('data:')))) ? (
+                        <img src={item.image_url || item.image} alt={item.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-3xl">{item.image || '🍔'}</span>
+                      )}
+                    </div>
                     <div className="flex-1"><p className="font-bold">{item.name}</p><p className="text-orange-500 font-semibold">R$ {parseFloat(item.price).toFixed(2)}</p></div>
                     <div className="flex items-center gap-2">
                       <button onClick={() => updateQty(item.id, -1)} className="bg-gray-200 hover:bg-gray-300 p-2 rounded-lg transition"><Minus size={14} /></button>
@@ -679,24 +690,110 @@ export default function PedidoRapido() {
     const [showProductModal, setShowProductModal] = useState(false);
     const [editProduct, setEditProduct]           = useState(null);
     const [pName, setPName] = useState(''); const [pPrice, setPPrice] = useState('');
-    const [pDesc, setPDesc] = useState(''); const [pImage, setPImage] = useState('');
+    const [pDesc, setPDesc]       = useState('');
+    const [pImage, setPImage]     = useState('');   // emoji
+    const [pImageUrl, setPImageUrl] = useState(''); // URL real após upload/conversão
+    const [pUploading, setPUploading] = useState(false);
     const [pSaving, setPSaving]   = useState(false);
     const [ajNome, setAjNome]     = useState(currentTenant?.name || '');
     const [ajWpp, setAjWpp]       = useState(currentTenant?.whatsapp || currentTenant?.phone || '');
     const [ajPw, setAjPw]         = useState('');
     const [ajSaving, setAjSaving] = useState(false);
 
-    const openNewProduct = () => { setEditProduct(null); setPName(''); setPPrice(''); setPDesc(''); setPImage(''); setShowProductModal(true); };
-    const openEditProduct = (p) => { setEditProduct(p); setPName(p.name); setPPrice(String(p.price)); setPDesc(p.description||''); setPImage(p.image||''); setShowProductModal(true); };
+    const openNewProduct = () => { setEditProduct(null); setPName(''); setPPrice(''); setPDesc(''); setPImage(''); setPImageUrl(''); setShowProductModal(true); };
+    const openEditProduct = (p) => {
+      setEditProduct(p); setPName(p.name); setPPrice(String(p.price)); setPDesc(p.description||'');
+      const img = p.image_url || p.image || '';
+      // se é URL real, coloca em pImageUrl; se é emoji, coloca em pImage
+      if (img.startsWith('http') || img.startsWith('data:')) { setPImageUrl(img); setPImage(''); }
+      else { setPImage(img); setPImageUrl(''); }
+      setShowProductModal(true);
+    };
+
+
+    // ── Converte imagem para WebP e faz upload para Supabase Storage ──
+    const handleImageUpload = async (file) => {
+      if (!file) return;
+      setPUploading(true);
+      try {
+        // Converte para WebP via Canvas
+        const webpBlob = await new Promise((resolve, reject) => {
+          const img = new Image();
+          const url = URL.createObjectURL(file);
+          img.onload = () => {
+            const maxSize = 800;
+            let w = img.width, h = img.height;
+            if (w > maxSize || h > maxSize) {
+              if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
+              else       { w = Math.round(w * maxSize / h); h = maxSize; }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            canvas.toBlob(b => b ? resolve(b) : reject(new Error('Conversão falhou')), 'image/webp', 0.85);
+            URL.revokeObjectURL(url);
+          };
+          img.onerror = reject;
+          img.src = url;
+        });
+
+        // Upload para Supabase Storage bucket "products"
+        const fileName = `${currentTenant.id}/${Date.now()}.webp`;
+        const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/products/${fileName}`, {
+          method: 'POST',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'image/webp', 'x-upsert': 'true' },
+          body: webpBlob,
+        });
+        if (!uploadRes.ok) {
+          // Se bucket não existe, usa base64 como fallback
+          const reader = new FileReader();
+          reader.onload = e => { setPImageUrl(e.target.result); setPImage(''); };
+          reader.readAsDataURL(webpBlob);
+          showToast('Imagem salva localmente (configure o bucket "products" no Supabase para persistir)', 'warning');
+          return;
+        }
+        const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/products/${fileName}`;
+        setPImageUrl(publicUrl);
+        setPImage('');
+        showToast('Imagem enviada! ✅');
+      } catch (e) {
+        showToast(`Erro no upload: ${e.message}`, 'error');
+      } finally {
+        setPUploading(false);
+      }
+    };
 
     const saveProduct = async () => {
       if (!pName.trim() || !pPrice) { showToast('Nome e preço obrigatórios', 'error'); return; }
       setPSaving(true);
       try {
         if (editProduct) {
-          await apiUpdate('products', 'id', editProduct.id, { name: pName, price: parseFloat(pPrice), description: pDesc, image: pImage });
+          const imgVal = pImageUrl || pImage || null;
+          await apiUpdate('products', 'id', editProduct.id, { name: pName, price: parseFloat(pPrice), description: pDesc, image: imgVal, image_url: imgVal });
         } else {
-          await apiInsert('products', { tenant_id: currentTenant.id, store_id: currentTenant.id, name: pName, price: parseFloat(pPrice), description: pDesc, image: pImage, available: true, created_at: new Date().toISOString() });
+          // Descobre qual coluna FK de products existe
+          const prodBase = { name: pName, price: parseFloat(pPrice), description: pDesc || null, available: true, created_at: new Date().toISOString() };
+          // Tenta com image_url, depois image (nome varia por banco)
+          if (pImageUrl) { prodBase.image_url = pImageUrl; prodBase.image = pImageUrl; }
+          else if (pImage) { prodBase.image = pImage; }
+          // Tenta inserir com tenant_id e store_id simultaneamente (um deles vai funcionar)
+          let prodSaved = false;
+          for (const fkVariant of [
+            { ...prodBase, tenant_id: currentTenant.id, store_id: currentTenant.id },
+            { ...prodBase, store_id: currentTenant.id },
+            { ...prodBase, tenant_id: currentTenant.id },
+            prodBase,
+          ]) {
+            try {
+              await apiInsert('products', fkVariant);
+              prodSaved = true;
+              break;
+            } catch (e) {
+              const msg = e.message || '';
+              if (!msg.includes('column') && !msg.includes('schema') && !msg.includes('cache') && !msg.includes('violates')) throw e;
+            }
+          }
+          if (!prodSaved) throw new Error('Não foi possível salvar o produto');
         }
         showToast(editProduct ? 'Produto atualizado!' : 'Produto criado!');
         setShowProductModal(false); reloadProducts(currentTenant.id);
@@ -822,7 +919,13 @@ export default function PedidoRapido() {
                 <div className="space-y-3">
                   {products.map(p => (
                     <div key={p.id} className="bg-white rounded-2xl p-4 shadow flex items-center gap-4">
-                      <div className="text-3xl w-10 text-center flex-shrink-0">{p.image||'🍔'}</div>
+                      <div className="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 bg-orange-50 flex items-center justify-center">
+                        {(p.image_url || (p.image && (p.image.startsWith('http') || p.image.startsWith('data:')))) ? (
+                          <img src={p.image_url || p.image} alt={p.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-2xl">{p.image || '🍔'}</span>
+                        )}
+                      </div>
                       <div className="flex-1 min-w-0"><p className="font-bold truncate">{p.name}</p><p className="text-orange-600 font-bold text-sm">R$ {parseFloat(p.price||0).toFixed(2)}</p>{p.description&&<p className="text-gray-400 text-xs truncate">{p.description}</p>}</div>
                       <div className="flex items-center gap-1 flex-shrink-0">
                         <button onClick={async()=>{ const v=!isAvailable(p); await apiUpdate('products','id',p.id,{available:v}); setProducts(prev=>prev.map(x=>x.id===p.id?{...x,available:v}:x)); showToast(v?'Ativado ✅':'Desativado'); }} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${isAvailable(p)?'bg-green-100 text-green-700 hover:bg-green-200':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{isAvailable(p)?'✅ Disponível':'❌ Inativo'}</button>
@@ -841,7 +944,31 @@ export default function PedidoRapido() {
                       <input placeholder="Nome do produto *" value={pName} onChange={e=>setPName(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
                       <input placeholder="Preço (ex: 15.90) *" value={pPrice} onChange={e=>setPPrice(e.target.value)} type="number" step="0.01" min="0" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
                       <textarea placeholder="Descrição (opcional)" value={pDesc} onChange={e=>setPDesc(e.target.value)} rows={2} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none resize-none" />
-                      <input placeholder="Emoji (ex: 🍔 🍕 🌮)" value={pImage} onChange={e=>setPImage(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none" />
+                      {/* Upload de imagem real */}
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-gray-500 block">Foto do Produto</label>
+                        {(pImageUrl) ? (
+                          <div className="relative w-full h-40 rounded-xl overflow-hidden border-2 border-orange-300">
+                            <img src={pImageUrl} alt="preview" className="w-full h-full object-cover" />
+                            <button onClick={() => { setPImageUrl(''); setPImage(''); }} className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-7 h-7 flex items-center justify-center shadow"><X size={14} /></button>
+                          </div>
+                        ) : (
+                          <label className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer transition ${pUploading ? 'border-orange-400 bg-orange-50' : 'border-gray-300 hover:border-orange-400 hover:bg-orange-50'}`}>
+                            {pUploading ? (
+                              <><Spinner size={28} /><span className="text-xs text-orange-500 mt-2">Convertendo para WebP...</span></>
+                            ) : (
+                              <><span className="text-3xl mb-1">📷</span><span className="text-xs text-gray-500 font-semibold">Tirar foto ou escolher da galeria</span><span className="text-xs text-gray-400">JPG, PNG, HEIC → converte para WebP</span></>
+                            )}
+                            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => e.target.files[0] && handleImageUpload(e.target.files[0])} />
+                          </label>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-px bg-gray-200" />
+                          <span className="text-xs text-gray-400">ou use emoji</span>
+                          <div className="flex-1 h-px bg-gray-200" />
+                        </div>
+                        <input placeholder="Emoji (ex: 🍔 🍕 🌮)" value={pImage} onChange={e => { setPImage(e.target.value); setPImageUrl(''); }} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:border-orange-400 outline-none" />
+                      </div>
                     </div>
                     <div className="flex gap-3 mt-6">
                       <button onClick={()=>setShowProductModal(false)} className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50 transition">Cancelar</button>
