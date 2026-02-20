@@ -491,7 +491,14 @@ export default function App() {
     const [addr,setAddr]=useState('');
     const [ref,setRef]=useState('');
     const [snd,setSnd]=useState(false);
+    const [done,setDone]=useState(false);   // modal de sucesso
+    const [wppMsg,setWppMsg]=useState('');  // mensagem WhatsApp pré-montada
     if(!tenant) return null;
+
+    const openWpp=()=>{
+      const wp=tenant.whatsapp||tenant.phone;
+      if(wp&&wppMsg) window.open(`https://wa.me/${wp}?text=${wppMsg}`,'_blank');
+    };
 
     const send=async()=>{
       if(!name.trim())               {toast$('Digite seu nome!','error');   return;}
@@ -518,15 +525,14 @@ export default function App() {
 
         await dbInsert('orders',row);
 
-        const wp=tenant.whatsapp||tenant.phone;
-        if(wp){
-          const loc=type==='local'?`🪑 Mesa ${mesa}`:type==='viagem'?'🛍️ Para viagem':`🛵 ${addr}`;
-          let msg=`🍔 *PEDIDO - ${tenant.name}*%0A%0A👤 ${name}%0A📍 ${loc}%0A%0A`;
-          cart.forEach(i=>{msg+=`• ${i.qty}x ${i.name} — R$${(parseFloat(i.price)*i.qty).toFixed(2)}%0A`;});
-          msg+=`%0A💰 *TOTAL: R$${cartT.toFixed(2)}*`;
-          window.open(`https://wa.me/${wp}?text=${msg}`,'_blank');
-        }
-        setCart([]);toast$('Pedido enviado! 🎉');setView('menu');
+        // Monta mensagem WhatsApp para uso opcional
+        const loc2=type==='local'?`🪑 Mesa ${mesa}`:type==='viagem'?'🛍️ Para viagem':`🛵 ${addr}`;
+        let msg2=`🍔 *PEDIDO - ${tenant.name}*%0A%0A👤 ${name}%0A📍 ${loc2}%0A%0A`;
+        [...cart].forEach(i=>{msg2+=`• ${i.qty}x ${i.name} — R$${(parseFloat(i.price)*i.qty).toFixed(2)}%0A`;});
+        msg2+=`%0A💰 *TOTAL: R$${cartT.toFixed(2)}*`;
+        setWppMsg(msg2);
+        setCart([]);
+        setDone(true); // mostra modal de sucesso
       }catch(e){toast$(`Erro: ${e.message}`,'error');}
       finally{setSnd(false);}
     };
@@ -537,7 +543,25 @@ export default function App() {
           <button onClick={()=>go('menu')} className="flex items-center gap-2 mb-2 opacity-90 hover:opacity-100 text-sm"><ArrowLeft size={16}/> Voltar ao Cardápio</button>
           <h1 className="text-2xl font-extrabold">Seu Carrinho</h1>
         </header>
-        <div className="max-w-lg mx-auto p-4 space-y-4">
+        {/* Modal de sucesso com WhatsApp opcional */}
+      {done&&(
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl p-8 shadow-2xl w-full max-w-sm text-center">
+            <div className="text-6xl mb-3">🎉</div>
+            <h2 className="text-2xl font-extrabold text-gray-800 mb-1">Pedido Enviado!</h2>
+            <p className="text-gray-400 text-sm mb-6">Seu pedido foi registrado com sucesso e já está na cozinha.</p>
+            {(tenant.whatsapp||tenant.phone)&&(
+              <button onClick={openWpp} className="w-full mb-3 py-3 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition text-sm">
+                <span className="text-lg">💬</span> Confirmar pelo WhatsApp (opcional)
+              </button>
+            )}
+            <button onClick={()=>{setDone(false);setView('menu');}} className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-bold transition text-sm">
+              Voltar ao Cardápio
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="max-w-lg mx-auto p-4 space-y-4">
           {cart.length===0?(
             <div className="bg-white rounded-2xl shadow p-12 text-center"><ShoppingCart className="text-gray-200 mx-auto mb-4" size={64}/><p className="text-gray-400 mb-4">Carrinho vazio</p><button onClick={()=>go('menu')} className="bg-orange-500 text-white px-6 py-3 rounded-xl font-bold hover:bg-orange-600">Ver Cardápio</button></div>
           ):(
@@ -578,7 +602,7 @@ export default function App() {
                 <div className="flex justify-between items-center mb-4"><span className="font-bold text-lg">Total</span><span className="text-2xl font-extrabold text-orange-500">R$ {cartT.toFixed(2)}</span></div>
                 <button onClick={send} disabled={snd} className="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-4 rounded-xl font-extrabold text-lg flex items-center justify-center gap-2 hover:brightness-110 disabled:opacity-50">
                   {snd?<Spin sz={22} c="text-white"/>:<Send size={22}/>}
-                  {snd?'Enviando...':(tenant.whatsapp||tenant.phone)?'Enviar via WhatsApp':'Confirmar Pedido'}
+                  {snd?'Enviando...':'Confirmar Pedido'}
                 </button>
               </div>
             </>
@@ -630,7 +654,15 @@ export default function App() {
           method:'POST',headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'image/webp','x-upsert':'true'},body:blob,
         });
         if(up.ok){upd('imgUrl',`${SUPABASE_URL}/storage/v1/object/public/products/${fn}`);upd('img','');toast$('Imagem enviada! ✅');}
-        else{await new Promise(r=>{const rd=new FileReader();rd.onload=e=>{upd('imgUrl',e.target.result);upd('img','');r();};rd.readAsDataURL(blob);});toast$('Imagem carregada! ✅');}
+        else{
+          // Fallback: salva como base64 no estado (será gravado no campo image do produto)
+          await new Promise(r=>{
+            const rd=new FileReader();
+            rd.onload=e=>{ upd('imgUrl',e.target.result); upd('img',''); r(); };
+            rd.readAsDataURL(blob);
+          });
+          toast$('Foto adicionada! ✅ Clique em Criar/Salvar para gravar.');
+        }
       }catch(e){toast$(`Erro: ${e.message}`,'error');}
       finally{setUpl(false);}
     };
