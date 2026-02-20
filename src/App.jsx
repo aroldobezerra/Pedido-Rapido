@@ -117,6 +117,14 @@ export default function App() {
   const [tab, setTab]           = useState('resumo');
   const prevTab                 = useRef('');
 
+  // ── Estados do modal de produto (elevados para sobreviver re-renders do toast) ──
+  const [prodModal, setProdModal]   = useState(false);
+  const [editProd, setEditProd]     = useState(null);
+  const [pf, setPf]                 = useState({name:'',price:'',cat:'Geral',desc:'',img:'',imgUrl:''});
+  const [uploading, setUploading]   = useState(false);
+  const [pSaving, setPSaving]       = useState(false);
+  const imgRef                      = useRef('');
+
   const toast$ = useCallback((msg, type='success') => setToast({ msg, type }), []);
 
   // ── Products ─────────────────────────────────────────────────────
@@ -616,12 +624,11 @@ export default function App() {
   // ADMIN
   // ════════════════════════════════════════════════════════════════
   const AdminPage = () => {
-    const [modal,setModal]=useState(false);
-    const [editP,setEditP]=useState(null);
-    const [pf,setPf]=useState({name:'',price:'',cat:'Geral',desc:'',img:'',imgUrl:''});
-    const [upl,setUpl]=useState(false);
-    const [pSav,setPSav]=useState(false);
-    const imgRef=useRef(''); // guarda imgUrl fora do ciclo de estado
+    // Estados de modal elevados para App root para sobreviver re-renders do Toast
+    const modal=prodModal, setModal=setProdModal;
+    const editP=editProd,  setEditP=setEditProd;
+    const upl=uploading,   setUpl=setUploading;
+    const pSav=pSaving,    setPSav=setPSaving;
     const [sf,setSf]=useState({name:tenant?.name||'',wpp:tenant?.whatsapp||tenant?.phone||'',pw:''});
     const [sSav,setSSav]=useState(false);
     const upd=(k,v)=>setPf(p=>({...p,[k]:v}));
