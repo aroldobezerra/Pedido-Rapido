@@ -627,7 +627,15 @@ export default function App() {
     const upd=(k,v)=>setPf(p=>({...p,[k]:v}));
     const CATS=['Geral','Lanches','Bebidas','Sobremesas','Porções','Combos','Vegano','Outros'];
 
-    const openNew=()=>{setEditP(null);imgRef.current='';setPf({name:'',price:'',cat:'Geral',desc:'',img:'',imgUrl:''});setModal(true);};
+    const openNew=()=>{
+      setEditP(null);
+      imgRef.current='';
+      // Limpa hidden input também
+      const h=document.getElementById('_imgStore');
+      if(h)h.value='';
+      setPf({name:'',price:'',cat:'Geral',desc:'',img:'',imgUrl:''});
+      setModal(true);
+    };
     const openEdit=(p)=>{
       setEditP(p);
       const src=p.image_url||p.image||'';
@@ -670,13 +678,17 @@ export default function App() {
         if(up.ok){
           const publicUrl=`${SUPABASE_URL}/storage/v1/object/public/products/${fn}`;
           imgRef.current=publicUrl;
+          // Salva em hidden input como backup extra
+          const h=document.getElementById('_imgStore');
+          if(h)h.value=publicUrl;
           upd('imgUrl',publicUrl);upd('img','');
-          toast$('Imagem enviada! ✅');
+          toast$('Imagem enviada! ✅ Clique em Criar Produto');
         }else{
-          // Fallback base64 — também grava em imgRef para garantir persistência
           imgRef.current=dataUrl;
+          const h2=document.getElementById('_imgStore');
+          if(h2)h2.value=dataUrl;
           upd('imgUrl',dataUrl);upd('img','');
-          toast$('Foto adicionada! ✅');
+          toast$('Foto adicionada! ✅ Clique em Criar Produto');
         }
         setTimeout(()=>{document.getElementById('btn-save-prod')?.scrollIntoView({behavior:'smooth',block:'end'});},150);
       }catch(e){toast$(`Erro: ${e.message}`,'error');}
@@ -687,8 +699,10 @@ export default function App() {
       if(!pf.name.trim()||!pf.price){toast$('Nome e preço obrigatórios','error');return;}
       setPSav(true);
       try{
-        // imgRef.current é mais confiável que pf.imgUrl (evita closure stale do React)
-        const imgVal=imgRef.current||pf.imgUrl||pf.img||null;
+        // Lê de múltiplas fontes para garantir que pega o valor correto
+        const hiddenImg=document.getElementById('_imgStore')?.value||'';
+        const imgVal=hiddenImg||imgRef.current||pf.imgUrl||pf.img||null;
+        console.log('[saveProd] imgVal:', imgVal?imgVal.substring(0,60)+'...':'null');
         if(editP){
           // Update — só campos que têm no schema e não tem FK problemática
           await dbUpdate('products',editP.id,{name:pf.name,price:parseFloat(pf.price),category:pf.cat||'Geral',description:pf.desc||null,image:imgVal});
@@ -697,7 +711,6 @@ export default function App() {
           // Usa tenant_id (sem FK) — NÃO usa store_id (FK→stores, inválida para tenants)
           await dbInsert('products',{
             tenant_id:    tenant.id,
-            store_id:     tenant.id,   // após DROP CONSTRAINT funciona livremente
             name:         pf.name,
             price:        parseFloat(pf.price),
             category:     pf.cat||'Geral',
@@ -707,8 +720,11 @@ export default function App() {
             available:    true,
             extras:       [],
           });
+          console.log('[saveProd] inserido com image:', imgVal ? imgVal.substring(0,80)+'...' : 'null');
         }
         imgRef.current='';
+        const hClr=document.getElementById('_imgStore');
+        if(hClr)hClr.value='';
         toast$(editP?'Produto atualizado! ✅':'Produto criado! ✅');
         setModal(false);
         await loadProducts(tenant.id);
@@ -720,6 +736,20 @@ export default function App() {
 
     return(
       <div className="min-h-screen bg-gray-100 pb-20">
+        {/* Input file FORA do modal — evita bug de fechar overlay no mobile */}
+        <input
+          type="file"
+          id="_fileInput"
+          accept="image/*"
+          className="hidden"
+          onChange={e=>{
+            if(e.target.files[0]){
+              uploadImg(e.target.files[0]);
+              // Limpa o input para permitir selecionar a mesma foto novamente
+              e.target.value='';
+            }
+          }}
+        />
         {/* Header */}
         <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white p-4 shadow">
           <div className="max-w-4xl mx-auto flex justify-between items-center">
@@ -852,27 +882,36 @@ export default function App() {
                         </select>
                       </div>
                       <textarea placeholder="Descrição (opcional)" value={pf.desc} onChange={e=>upd('desc',e.target.value)} rows={2} className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none resize-none"/>
-                      {/* Image */}
+                      {/* Image — input fora do modal para não fechar o overlay */}
                       <div>
                         <label className="text-xs font-bold text-gray-400 block mb-2">Foto do Produto</label>
                         {pf.imgUrl?(
                           <div className="relative h-36 rounded-xl overflow-hidden border-2 border-orange-300 shadow-md">
                             <img src={pf.imgUrl} alt="preview" className="w-full h-full object-cover"/>
-                            <button onClick={()=>{upd('imgUrl','');upd('img','');}} className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-7 h-7 flex items-center justify-center shadow-lg"><X size={13}/></button>
+                            <button type="button" onClick={()=>{upd('imgUrl','');upd('img','');imgRef.current='';const h=document.getElementById('_imgStore');if(h)h.value='';}} className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-7 h-7 flex items-center justify-center shadow-lg"><X size={13}/></button>
                             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent py-2 px-3">
-                              <p className="text-white text-xs font-bold text-center">✅ Foto pronta — clique em <span className="text-yellow-300">{editP?'Salvar':'Criar'}</span> abaixo</p>
+                              <p className="text-white text-xs font-bold text-center">✅ Foto pronta</p>
                             </div>
                           </div>
                         ):(
-                          <label className={`flex flex-col items-center justify-center h-24 border-2 border-dashed rounded-xl cursor-pointer transition ${upl?'border-orange-400 bg-orange-50':'border-gray-200 hover:border-orange-300 hover:bg-orange-50'}`}>
-                            {upl?<><Spin sz={22}/><span className="text-xs text-orange-500 mt-1">Convertendo...</span></>:<><Camera size={24} className="text-gray-300 mb-1"/><span className="text-xs text-gray-400">Foto ou galeria → WebP automático</span></>}
-                            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>e.target.files[0]&&uploadImg(e.target.files[0])}/>
-                          </label>
+                          <button
+                            type="button"
+                            disabled={upl}
+                            onClick={()=>document.getElementById('_fileInput').click()}
+                            className={`w-full flex flex-col items-center justify-center h-24 border-2 border-dashed rounded-xl transition ${upl?'border-orange-400 bg-orange-50':'border-gray-200 hover:border-orange-400 hover:bg-orange-50'}`}
+                          >
+                            {upl
+                              ? <><Spin sz={22}/><span className="text-xs text-orange-500 mt-1">Enviando foto...</span></>
+                              : <><Camera size={24} className="text-gray-300 mb-1"/><span className="text-xs text-gray-500 font-semibold">📷 Tirar foto ou escolher da galeria</span></>
+                            }
+                          </button>
                         )}
                         <div className="flex items-center gap-2 mt-2"><div className="flex-1 h-px bg-gray-100"/><span className="text-xs text-gray-300">ou emoji</span><div className="flex-1 h-px bg-gray-100"/></div>
-                        <input placeholder="🍔 🍕 🌮" value={pf.img} onChange={e=>{upd('img',e.target.value);upd('imgUrl','');}} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:border-orange-400 outline-none mt-1"/>
+                        <input placeholder="🍔 🍕 🌮" value={pf.img} onChange={e=>{upd('img',e.target.value);upd('imgUrl','');imgRef.current='';}} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:border-orange-400 outline-none mt-1"/>
                       </div>
                     </div>
+                    {/* Hidden input como backup para imgUrl — bypassa closures do React */}
+                    <input type="hidden" id="_imgStore" defaultValue="" />
                     <div className="flex gap-3 mt-5">
                       <button onClick={()=>setModal(false)} className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50">Cancelar</button>
                       <button id="btn-save-prod" onClick={saveProd} disabled={pSav||upl} className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-bold hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2 text-base">{pSav?<Spin sz={15} c="text-white"/>:<CheckCircle size={15}/>}{editP?'Salvar Produto':'Criar Produto'}</button>
