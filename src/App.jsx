@@ -638,33 +638,44 @@ export default function App() {
     const uploadImg=async(file)=>{
       if(!file)return;setUpl(true);
       try{
-        const blob=await new Promise((res,rej)=>{
+        // Converte para JPEG/base64 com dimensão reduzida (máx 400px, qualidade 0.7)
+        // para caber no campo text do Postgres sem precisar de bucket
+        const dataUrl=await new Promise((res,rej)=>{
           const img=new Image(),url=URL.createObjectURL(file);
           img.onload=()=>{
-            const max=800,w=img.width,h=img.height;
+            const max=400,w=img.width,h=img.height;
             const [nw,nh]=w>h?[max,Math.round(h*max/w)]:[Math.round(w*max/h),max];
-            const c=document.createElement('canvas');c.width=Math.min(w,nw);c.height=Math.min(h,nh);
+            const c=document.createElement('canvas');
+            c.width=Math.min(w,nw);c.height=Math.min(h,nh);
             c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-            c.toBlob(b=>b?res(b):rej(new Error('Falhou')),'image/webp',0.85);
+            // Usa JPEG (menor que WebP para base64)
+            res(c.toDataURL('image/jpeg',0.7));
             URL.revokeObjectURL(url);
           };img.onerror=rej;img.src=url;
         });
-        const fn=`${tenant.id}/${Date.now()}.webp`;
+
+        // Tenta primeiro fazer upload para Supabase Storage
+        const byteStr=atob(dataUrl.split(',')[1]);
+        const arr=new Uint8Array(byteStr.length);
+        for(let i=0;i<byteStr.length;i++)arr[i]=byteStr.charCodeAt(i);
+        const blob=new Blob([arr],{type:'image/jpeg'});
+        const fn=`${tenant.id}/${Date.now()}.jpg`;
         const up=await fetch(`${SUPABASE_URL}/storage/v1/object/products/${fn}`,{
-          method:'POST',headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'image/webp','x-upsert':'true'},body:blob,
+          method:'POST',
+          headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'image/jpeg','x-upsert':'true'},
+          body:blob,
         });
-        if(up.ok){upd('imgUrl',`${SUPABASE_URL}/storage/v1/object/public/products/${fn}`);upd('img','');toast$('Imagem enviada! ✅');}
-        else{
-          // Fallback: salva como base64 no estado (será gravado no campo image do produto)
-          await new Promise(r=>{
-            const rd=new FileReader();
-            rd.onload=e=>{ upd('imgUrl',e.target.result); upd('img',''); r(); };
-            rd.readAsDataURL(blob);
-          });
+        if(up.ok){
+          const publicUrl=`${SUPABASE_URL}/storage/v1/object/public/products/${fn}`;
+          upd('imgUrl',publicUrl);upd('img','');
+          toast$('Imagem enviada! ✅');
+        }else{
+          // Fallback: salva base64 diretamente no campo image
+          // Tamanho estimado: ~${Math.round(dataUrl.length/1024)}KB
+          upd('imgUrl',dataUrl);upd('img','');
           toast$('Foto adicionada! ✅');
-          // Rola para o botão de salvar
-          setTimeout(()=>{ document.getElementById('btn-save-prod')?.scrollIntoView({behavior:'smooth',block:'end'}); }, 150);
         }
+        setTimeout(()=>{document.getElementById('btn-save-prod')?.scrollIntoView({behavior:'smooth',block:'end'});},150);
       }catch(e){toast$(`Erro: ${e.message}`,'error');}
       finally{setUpl(false);}
     };
@@ -674,6 +685,7 @@ export default function App() {
       setPSav(true);
       try{
         const imgVal=pf.imgUrl||pf.img||null;
+        console.log('[saveProd] imgVal tipo:', imgVal ? (imgVal.startsWith('data:') ? `base64 ${Math.round(imgVal.length/1024)}KB` : imgVal.startsWith('http') ? 'URL' : 'emoji') : 'null');
         if(editP){
           // Update — só campos que têm no schema e não tem FK problemática
           await dbUpdate('products',editP.id,{name:pf.name,price:parseFloat(pf.price),category:pf.cat||'Geral',description:pf.desc||null,image:imgVal});
@@ -694,7 +706,9 @@ export default function App() {
           });
         }
         toast$(editP?'Produto atualizado! ✅':'Produto criado! ✅');
-        setModal(false);loadProducts(tenant.id);
+        setModal(false);
+        // Reload para pegar dados frescos do banco
+        await loadProducts(tenant.id);
       }catch(e){toast$(`Erro: ${e.message}`,'error');}
       finally{setPSav(false);}
     };
