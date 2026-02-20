@@ -309,7 +309,7 @@ export default function App() {
       try{
         const ex=await dbFetch('tenants',{eq:{col:'slug',val:f.slug}});
         if(ex.length){toast$('Identificador já existe!','error');return;}
-        const t=await dbInsert('tenants',{name:f.name,slug:f.slug,whatsapp:f.whatsapp,phone:f.whatsapp,password:f.password,plan:'trial',active:true,created_at:new Date().toISOString()});
+        const t=await dbInsert('tenants',{name:f.name,slug:f.slug,whatsapp:f.whatsapp,password:f.password,plan:'trial',active:true,created_at:new Date().toISOString()});
         setTenant(t);setProducts([]);window.history.pushState({},'',`/${f.slug}`);toast$('Conta criada! 🎉');setView('menu');
       }catch(e){toast$(`Erro: ${e.message}`,'error');}finally{setSav(false);}
     };
@@ -368,7 +368,7 @@ export default function App() {
     const create=async()=>{
       if(!nf.name.trim()||!nf.slug.trim()){toast$('Nome e slug obrigatórios','error');return;}
       setSav(true);
-      try{await dbInsert('tenants',{name:nf.name,slug:nf.slug.toLowerCase().replace(/\s+/g,'-'),whatsapp:nf.phone,phone:nf.phone,password:nf.pw||'admin123',trial_expires_at:nf.exp||null,active:true,created_at:new Date().toISOString()});toast$('Loja criada!');setModal(false);setNf({name:'',slug:'',phone:'',pw:'',exp:''});loadTenants();}
+      try{await dbInsert('tenants',{name:nf.name,slug:nf.slug.toLowerCase().replace(/\s+/g,'-'),whatsapp:nf.phone,password:nf.pw||'admin123',trial_expires_at:nf.exp||null,active:true,created_at:new Date().toISOString()});toast$('Loja criada!');setModal(false);setNf({name:'',slug:'',phone:'',pw:'',exp:''});loadTenants();}
       catch(e){toast$(`Erro: ${e.message}`,'error');}finally{setSav(false);}
     };
     return(
@@ -661,7 +661,9 @@ export default function App() {
             rd.onload=e=>{ upd('imgUrl',e.target.result); upd('img',''); r(); };
             rd.readAsDataURL(blob);
           });
-          toast$('Foto adicionada! ✅ Clique em Criar/Salvar para gravar.');
+          toast$('Foto adicionada! ✅');
+          // Rola para o botão de salvar
+          setTimeout(()=>{ document.getElementById('btn-save-prod')?.scrollIntoView({behavior:'smooth',block:'end'}); }, 150);
         }
       }catch(e){toast$(`Erro: ${e.message}`,'error');}
       finally{setUpl(false);}
@@ -837,9 +839,12 @@ export default function App() {
                       <div>
                         <label className="text-xs font-bold text-gray-400 block mb-2">Foto do Produto</label>
                         {pf.imgUrl?(
-                          <div className="relative h-32 rounded-xl overflow-hidden border-2 border-orange-200">
+                          <div className="relative h-36 rounded-xl overflow-hidden border-2 border-orange-300 shadow-md">
                             <img src={pf.imgUrl} alt="preview" className="w-full h-full object-cover"/>
-                            <button onClick={()=>{upd('imgUrl','');upd('img','');}} className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-7 h-7 flex items-center justify-center shadow"><X size={13}/></button>
+                            <button onClick={()=>{upd('imgUrl','');upd('img','');}} className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-7 h-7 flex items-center justify-center shadow-lg"><X size={13}/></button>
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent py-2 px-3">
+                              <p className="text-white text-xs font-bold text-center">✅ Foto pronta — clique em <span className="text-yellow-300">{editP?'Salvar':'Criar'}</span> abaixo</p>
+                            </div>
                           </div>
                         ):(
                           <label className={`flex flex-col items-center justify-center h-24 border-2 border-dashed rounded-xl cursor-pointer transition ${upl?'border-orange-400 bg-orange-50':'border-gray-200 hover:border-orange-300 hover:bg-orange-50'}`}>
@@ -853,7 +858,7 @@ export default function App() {
                     </div>
                     <div className="flex gap-3 mt-5">
                       <button onClick={()=>setModal(false)} className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50">Cancelar</button>
-                      <button onClick={saveProd} disabled={pSav||upl} className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-bold hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2">{pSav?<Spin sz={15} c="text-white"/>:<CheckCircle size={15}/>}{editP?'Salvar':'Criar'}</button>
+                      <button id="btn-save-prod" onClick={saveProd} disabled={pSav||upl} className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-bold hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2 text-base">{pSav?<Spin sz={15} c="text-white"/>:<CheckCircle size={15}/>}{editP?'Salvar Produto':'Criar Produto'}</button>
                     </div>
                   </div>
                 </Overlay>
@@ -870,7 +875,7 @@ export default function App() {
                 <div><label className="text-xs font-bold text-gray-400 block mb-1">WhatsApp</label><input value={sf.wpp} onChange={e=>setSf(p=>({...p,wpp:e.target.value.replace(/\D/g,'')}))} placeholder="5585999999999" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/></div>
                 <div><label className="text-xs font-bold text-gray-400 block mb-1">Nova senha (branco = não altera)</label><input type="password" value={sf.pw} onChange={e=>setSf(p=>({...p,pw:e.target.value}))} placeholder="Nova senha" className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-orange-400 outline-none"/></div>
                 <div><label className="text-xs font-bold text-gray-400 block mb-1">Link do cardápio</label><div className="bg-gray-50 rounded-xl px-4 py-3 text-sm text-orange-500 font-mono break-all select-all">{window.location.origin}/{tenant?.slug}</div></div>
-                <button onClick={async()=>{setSSav(true);try{const d={name:sf.name,whatsapp:sf.wpp,phone:sf.wpp};if(sf.pw.trim())d.password=sf.pw;await dbUpdate('tenants',tenant.id,d);setTenant(p=>({...p,...d}));toast$('Salvo! ✅');}catch(e){toast$(`Erro: ${e.message}`,'error');}finally{setSSav(false);}}} disabled={sSav} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2">{sSav?<Spin sz={15} c="text-white"/>:<CheckCircle size={15}/>} Salvar</button>
+                <button onClick={async()=>{setSSav(true);try{const d={name:sf.name,whatsapp:sf.wpp};if(sf.pw.trim())d.password=sf.pw;await dbUpdate('tenants',tenant.id,d);setTenant(p=>({...p,...d}));toast$('Salvo! ✅');}catch(e){toast$(`Erro: ${e.message}`,'error');}finally{setSSav(false);}}} disabled={sSav} className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-3 rounded-xl font-bold hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2">{sSav?<Spin sz={15} c="text-white"/>:<CheckCircle size={15}/>} Salvar</button>
               </div>
             </div>
           )}
