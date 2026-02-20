@@ -621,17 +621,19 @@ export default function App() {
     const [pf,setPf]=useState({name:'',price:'',cat:'Geral',desc:'',img:'',imgUrl:''});
     const [upl,setUpl]=useState(false);
     const [pSav,setPSav]=useState(false);
+    const imgRef=useRef(''); // guarda imgUrl fora do ciclo de estado
     const [sf,setSf]=useState({name:tenant?.name||'',wpp:tenant?.whatsapp||tenant?.phone||'',pw:''});
     const [sSav,setSSav]=useState(false);
     const upd=(k,v)=>setPf(p=>({...p,[k]:v}));
     const CATS=['Geral','Lanches','Bebidas','Sobremesas','Porções','Combos','Vegano','Outros'];
 
-    const openNew=()=>{setEditP(null);setPf({name:'',price:'',cat:'Geral',desc:'',img:'',imgUrl:''});setModal(true);};
+    const openNew=()=>{setEditP(null);imgRef.current='';setPf({name:'',price:'',cat:'Geral',desc:'',img:'',imgUrl:''});setModal(true);};
     const openEdit=(p)=>{
       setEditP(p);
       const src=p.image_url||p.image||'';
       setPf({name:p.name,price:String(p.price),cat:p.category||'Geral',desc:p.description||'',
              img:realImg(src)?'':src, imgUrl:realImg(src)?src:''});
+      imgRef.current=realImg(src)?src:'';
       setModal(true);
     };
 
@@ -667,11 +669,12 @@ export default function App() {
         });
         if(up.ok){
           const publicUrl=`${SUPABASE_URL}/storage/v1/object/public/products/${fn}`;
+          imgRef.current=publicUrl;
           upd('imgUrl',publicUrl);upd('img','');
           toast$('Imagem enviada! ✅');
         }else{
-          // Fallback: salva base64 diretamente no campo image
-          // Tamanho estimado: ~${Math.round(dataUrl.length/1024)}KB
+          // Fallback base64 — também grava em imgRef para garantir persistência
+          imgRef.current=dataUrl;
           upd('imgUrl',dataUrl);upd('img','');
           toast$('Foto adicionada! ✅');
         }
@@ -684,8 +687,8 @@ export default function App() {
       if(!pf.name.trim()||!pf.price){toast$('Nome e preço obrigatórios','error');return;}
       setPSav(true);
       try{
-        const imgVal=pf.imgUrl||pf.img||null;
-        console.log('[saveProd] imgVal tipo:', imgVal ? (imgVal.startsWith('data:') ? `base64 ${Math.round(imgVal.length/1024)}KB` : imgVal.startsWith('http') ? 'URL' : 'emoji') : 'null');
+        // imgRef.current é mais confiável que pf.imgUrl (evita closure stale do React)
+        const imgVal=imgRef.current||pf.imgUrl||pf.img||null;
         if(editP){
           // Update — só campos que têm no schema e não tem FK problemática
           await dbUpdate('products',editP.id,{name:pf.name,price:parseFloat(pf.price),category:pf.cat||'Geral',description:pf.desc||null,image:imgVal});
@@ -705,9 +708,9 @@ export default function App() {
             extras:       [],
           });
         }
+        imgRef.current='';
         toast$(editP?'Produto atualizado! ✅':'Produto criado! ✅');
         setModal(false);
-        // Reload para pegar dados frescos do banco
         await loadProducts(tenant.id);
       }catch(e){toast$(`Erro: ${e.message}`,'error');}
       finally{setPSav(false);}
